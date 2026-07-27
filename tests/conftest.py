@@ -11,6 +11,7 @@ import gzip
 import os
 import sqlite3
 import zipfile
+from contextlib import closing
 from pathlib import Path
 
 import polars as pl
@@ -121,7 +122,11 @@ def samples(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     # zstd frame magic only; there is no stdlib compressor to make a real one.
     put("zstd_csv", "table.csv.zst").write_bytes(b"\x28\xb5\x2f\xfd" + b"\x00" * 64)
 
-    with sqlite3.connect(put("sqlite", "store.db")) as con:
+    # `with sqlite3.connect(...)` manages the transaction, NOT the connection —
+    # it never closes. On 3.13 the leaked handle surfaces as an unraisable
+    # exception during GC, which filterwarnings=error turns into a failure in
+    # whichever unrelated test happened to be running. closing() shuts it.
+    with closing(sqlite3.connect(put("sqlite", "store.db"))) as con, con:
         con.execute("CREATE TABLE sales (region TEXT, units INT)")
         con.execute("INSERT INTO sales VALUES ('north', 12)")
 

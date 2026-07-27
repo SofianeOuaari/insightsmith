@@ -157,4 +157,28 @@ def samples(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     put("csv_as_parquet", "actually_csv.parquet").write_text(
         "region,units\nnorth,12\nsouth,7\n", encoding="utf-8"
     )
+
+    # A genuine workbook, for the loaders. xlsxwriter is a dev dependency; the
+    # published package reads with fastexcel and never needs a writer.
+    TABLE.write_excel(put("xlsx_real", "real.xlsx"))
+    TABLE.write_ndjson(put("ndjson", "table.ndjson"))
+    with zipfile.ZipFile(put("zip_csv", "zipped.zip"), "w") as zf:
+        zf.writestr("inner.csv", "region,units\nnorth,12\nsouth,7\neast,23\n")
+    with gzip.open(put("gz_parquet", "table.parquet.gz"), "wb") as fh:
+        fh.write(out["parquet"].read_bytes())
+
+    # Deliberately grubby: nulls, a duplicate row, a near-duplicate differing
+    # only by case and spacing, a constant column, and one wild outlier.
+    put("messy", "messy.csv").write_text(
+        "name,team,score,note\n"
+        "ada,alpha,10,x\n"
+        "ada,alpha,10,x\n"
+        " ADA ,alpha,10,x\n"
+        "bob,alpha,12,\n"
+        "cyd,alpha,11,\n"
+        "dee,alpha,9999,\n"
+        "eve,alpha,13,\n"
+        "fay,alpha,,\n",
+        encoding="utf-8",
+    )
     return out

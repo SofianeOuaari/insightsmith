@@ -64,13 +64,14 @@ dev = [
   "mypy>=1.10",
   "ruff>=0.6",
   "pre-commit>=3.7",
+  "xlsxwriter>=3.2",  # test-only: writes the xlsx fixtures fastexcel then reads
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/insightsmith"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "README.md", "LICENSE"]
+include = ["src", "tests", "README.md", "CHANGELOG.md", "LICENSE"]
 
 # ----------------------------------------------------------------------------
 # ruff

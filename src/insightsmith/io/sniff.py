@@ -161,6 +161,13 @@ _CONF_EXTENSION_ONLY: Final = 0.55
 _CONF_OPAQUE: Final = 0.45
 _CONF_NONE: Final = 0.1
 
+# Outcomes we take at face value. Anything else is second-guessed below.
+_TRUSTED_ENCODINGS: Final = frozenset(
+    {"utf-8", "utf-8-sig", "ascii", "cp1252", "latin-1", "iso-8859-1", "iso-8859-15"}
+)
+# Above this share of bytes >= 0x80, the text really may be multi-byte.
+_SPARSE_HIGH_BYTES: Final = 0.05
+
 _NUM_COMMA_THOUSANDS: Final = re.compile(r"^-?\d{1,3}(,\d{3})+(\.\d+)?$")
 _NUM_DOT_THOUSANDS: Final = re.compile(r"^-?\d{1,3}(\.\d{3})+(,\d+)?$")
 _NUM_COMMA_DECIMAL: Final = re.compile(r"^-?\d+,\d+$")
@@ -406,6 +413,26 @@ def _decode(head: bytes) -> tuple[str, str, list[str]]:
 
     encoding = str(match.encoding).replace("_", "-")
     warnings: list[str] = []
+
+    # On short samples charset-normalizer will happily pick an MS-DOS codepage
+    # (cp775) or a CJK codec (gb18030) for what is plainly Western text with two
+    # umlauts in it, silently mangling them: "Süd" comes back as "S³d" or "S㥣".
+    # Sparse high bytes mean single-byte Western text, and cp1252 is what
+    # spreadsheets actually emit — so prefer it, and say that we did.
+    if encoding not in _TRUSTED_ENCODINGS and not encoding.startswith(("utf-16", "utf-32")):
+        high_bytes = sum(byte >= 0x80 for byte in head) / len(head)
+        if high_bytes <= _SPARSE_HIGH_BYTES:
+            try:
+                text = head.decode("cp1252")
+            except UnicodeDecodeError:
+                pass
+            else:
+                warnings.append(
+                    f"read as cp1252; charset-normalizer suggested {encoding}, but only "
+                    f"{high_bytes:.1%} of bytes are non-ASCII"
+                )
+                return "cp1252", text, warnings
+
     if encoding not in {"utf-8", "ascii"}:
         warnings.append(f"encoding detected as {encoding}")
     return encoding, str(match), warnings
@@ -490,7 +517,10 @@ def _probe_delimited(
     dialect = Dialect(
         delimiter=delimiter,
         quotechar=_quotechar(lines),
-        has_header=_has_header(text, delimiter),
+        # Header detection must see the comment-stripped text: given a leading
+        # "# exported ..." line, csv.Sniffer concludes there is no header and the
+        # real header row then gets loaded as data.
+        has_header=_has_header("\n".join(lines), delimiter),
         decimal=decimal,
         thousands=thousands,
         comment_prefix=comment_prefix,

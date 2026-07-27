@@ -121,6 +121,23 @@ def test_thousands_separator_inverts_the_decimal_mark(samples: dict[str, Path]) 
     assert spec.dialect.decimal == ","
 
 
+def test_sparse_non_ascii_is_read_as_cp1252(samples: dict[str, Path]) -> None:
+    """charset-normalizer guesses cp775/CJK on short Western samples; both mangle it."""
+    spec = sniff(samples["german_csv"])
+    assert spec.encoding == "cp1252"
+    text = samples["german_csv"].read_bytes().decode(spec.encoding)
+    assert "Süd" in text
+    assert "Köln" in text
+
+
+def test_comment_preamble_does_not_hide_the_header(samples: dict[str, Path]) -> None:
+    """csv.Sniffer sees "# exported ..." first and concludes there is no header."""
+    spec = sniff(samples["csv_commented"])
+    assert spec.dialect is not None
+    assert spec.dialect.comment_prefix == "#"
+    assert spec.dialect.has_header
+
+
 def test_bom_gives_utf_8_sig(samples: dict[str, Path]) -> None:
     assert sniff(samples["csv_bom"]).encoding == "utf-8-sig"
 

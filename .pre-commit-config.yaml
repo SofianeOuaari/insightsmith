@@ -1,0 +1,41 @@
+# Install both hook types so the commit-msg check actually runs:
+#   uv run pre-commit install --install-hooks
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: mixed-line-ending
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.3.0
+    hooks:
+      - id: mypy
+        files: ^src/
+        additional_dependencies:
+          - polars
+          - typer
+          - rich
+          - charset-normalizer
+
+  # Conventional Commits, per design doc §10 — the commit type drives the
+  # changelog and the version bump, so a malformed subject breaks git-cliff.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]

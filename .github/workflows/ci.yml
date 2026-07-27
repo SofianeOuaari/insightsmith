@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint & types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --all-extras
+
+      - name: ruff check
+        run: uv run ruff check --output-format=github .
+
+      - name: ruff format
+        run: uv run ruff format --check .
+
+      - name: mypy
+        run: uv run mypy src
+
+  test:
+    name: py${{ matrix.python }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+
+      - run: uv sync --all-extras
+
+      - name: pytest
+        run: uv run pytest --cov=insightsmith --cov-report=xml
+
+      - name: upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  build:
+    name: build & metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: build sdist & wheel
+        run: uv build
+
+      - name: check metadata renders on PyPI
+        run: uvx twine check --strict dist/*

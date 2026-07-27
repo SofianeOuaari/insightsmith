@@ -1,0 +1,131 @@
+name: Release
+
+# Tag push publishes to PyPI. Two guards run first, because both of these
+# mistakes are unrecoverable once a version is on PyPI: tagging a commit that
+# isn't on main, and a tag whose version disagrees with pyproject.toml.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false # never interrupt a publish mid-flight
+
+jobs:
+  guard:
+    name: verify tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: tag must be an ancestor of main
+        run: |
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME is not on main. Never tag a commit that isn't on main."
+            exit 1
+          fi
+
+      - name: tag must match the version in pyproject.toml
+        run: |
+          project=$(python3 -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')
+          tagged="${GITHUB_REF_NAME#v}"
+          if [ "$project" != "$tagged" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies version $tagged but pyproject.toml says $project"
+            exit 1
+          fi
+          echo "releasing $project"
+
+  build:
+    name: build & verify artifacts
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: build sdist & wheel
+        run: uv build
+
+      - name: check metadata renders on PyPI
+        run: uvx twine check --strict dist/*
+
+      # Install the built wheel in a clean env — catches a wheel that packages
+      # the wrong tree or omits py.typed before the version is burned on PyPI.
+      - name: smoke-test the wheel
+        run: |
+          uv venv --python 3.12 /tmp/smoke
+          VIRTUAL_ENV=/tmp/smoke uv pip install --quiet dist/*.whl
+          /tmp/smoke/bin/python -c "import insightsmith; print('imported', insightsmith.__version__)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/insightsmith
+    permissions:
+      id-token: write # Trusted Publishing (OIDC) — no API token in secrets
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload assets
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git-cliff needs the full history
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # No cliff.toml in the repo yet, so git-cliff uses its default config.
+      # Commits that aren't Conventional Commits are silently dropped.
+      - name: generate release notes
+        run: uvx git-cliff --latest --strip header --output RELEASE_NOTES.md
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Anything beyond digits-and-dots (rc1, b2, dev0) ships as a pre-release.
+          prerelease=""
+          if printf '%s' "${GITHUB_REF_NAME#v}" | grep -qvE '^[0-9]+(\.[0-9]+)*$'; then
+            prerelease="--prerelease"
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file RELEASE_NOTES.md \
+            --verify-tag \
+            $prerelease \
+            dist/*

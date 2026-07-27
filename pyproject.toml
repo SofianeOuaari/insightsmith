@@ -1,0 +1,148 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "insightsmith"
+version = "0.1.0"
+description = "Agentic data consultant that runs on your own hardware"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Sofiane Ouaari" }]
+keywords = [
+  "cli",
+  "data-analysis",
+  "data-profiling",
+  "eda",
+  "polars",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Typing :: Typed",
+]
+dependencies = [
+  "polars>=1.0",
+  "typer>=0.12",
+  "rich>=13.7",
+  "charset-normalizer>=3.3",
+]
+
+# Extras arrive with the milestone that needs them: viz (0.6.0), gemini/litellm
+# (0.3.0), stats (0.7.0), sql (1.2.0). Only 0.1.0's are declared here.
+[project.optional-dependencies]
+excel = ["fastexcel>=0.11"]
+pandas = ["pandas>=2.0", "pyarrow>=15"]
+all = ["insightsmith[excel,pandas]"]
+
+[project.scripts]
+insightsmith = "insightsmith.cli:app"
+ismith = "insightsmith.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/SofianeOuaari/insightsmith"
+Repository = "https://github.com/SofianeOuaari/insightsmith"
+Issues = "https://github.com/SofianeOuaari/insightsmith/issues"
+Changelog = "https://github.com/SofianeOuaari/insightsmith/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "hypothesis>=6.100",
+  "mypy>=1.10",
+  "ruff>=0.6",
+  "pre-commit>=3.7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/insightsmith"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "LICENSE"]
+
+# ----------------------------------------------------------------------------
+# ruff
+# ----------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+# ruff formats Python blocks inside Markdown; docs/ is a spec, not code, and
+# reformatting its illustrative snippets would churn the source of truth.
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = [
+  "ANN",  # flake8-annotations   — type hints on public functions
+  "B",    # flake8-bugbear
+  "C4",   # flake8-comprehensions
+  "E",    # pycodestyle errors
+  "F",    # pyflakes
+  "I",    # isort
+  "PTH",  # flake8-use-pathlib
+  "RET",  # flake8-return
+  "RUF",  # ruff-specific
+  "S",    # flake8-bandit        — catches shell=True, bare exec/eval
+  "SIM",  # flake8-simplify
+  "TID",  # flake8-tidy-imports
+  "UP",   # pyupgrade
+  "W",    # pycodestyle warnings
+]
+ignore = [
+  "ANN401",  # allow typing.Any where it is genuinely the contract
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "ANN",   # test functions don't need annotations
+  "S101",  # assert is the point
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+# ----------------------------------------------------------------------------
+# mypy
+# ----------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ----------------------------------------------------------------------------
+# pytest & coverage
+# ----------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["insightsmith"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "@overload",
+]

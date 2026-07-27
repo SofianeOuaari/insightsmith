@@ -1,0 +1,40 @@
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Environments
+.venv/
+venv/
+.env
+
+# uv — this is a library, so CI resolves fresh on every run to catch upstream
+# breakage. If you'd rather have reproducible CI, delete this line, commit
+# uv.lock, and add --frozen to the sync steps in ci.yml.
+uv.lock
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# insightsmith runtime state
+.insightsmith/

@@ -38,3 +38,7 @@ htmlcov/
 
 # insightsmith runtime state
 .insightsmith/
+
+# Local configuration files
+CLAUDE.md
+docs/

@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.2.0] - 2026-07-29
+
+### Build and packaging
+
+- Add psutil, bump to 0.2.0, document ismith doctor
+
+### Features
+
+- **hardware**: Probe the machine and size models against it
+- **cli**: Add `ismith doctor`
+
 ## [0.1.1] - 2026-07-29
 
 ### Bug fixes

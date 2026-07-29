@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.1.1] - 2026-07-29
+
+### Bug fixes
+
+- **profiling**: Infer date formats after loading so a bad date cannot fail the read
+
+### Build and packaging
+
+- Bump version to 0.1.1
+
+### Documentation
+
+- Note that date formats are inferred and may be ambiguous
+
 ## [0.1.0] - 2026-07-27
 
 ### Bug fixes

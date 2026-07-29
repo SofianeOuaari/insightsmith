@@ -117,6 +117,11 @@ Worth stating plainly, in advance:
   z-score as well, and both numbers are shown. They disagree usefully.
 - **"Near-duplicate" means one specific thing** — identical once string columns
   are trimmed and case-folded. It is not fuzzy matching.
+- **Dates are inferred, and `04/01/10` is genuinely ambiguous.** Date columns load
+  as strings and the format is inferred afterwards, so a file polars cannot parse
+  still loads. Where day-first and month-first fit equally well, the chosen format
+  is reported as a quality note rather than picked silently — check it before
+  trusting anything grouped by that column.
 - **Thousands separators are detected but not stripped.** polars has no option for
   them, so such columns may load as strings.
 - **No XML row-unit discovery, and zstd payloads aren't inspected** (no stdlib

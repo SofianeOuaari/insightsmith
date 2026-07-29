@@ -143,6 +143,10 @@ def _column_profile(frame: pl.DataFrame, schema: ColumnSchema, estimated: bool) 
         out.numeric = numeric_stats(series)
         out.iqr_outliers, out.modified_z_outliers = outlier_counts(series)
     elif schema.semantic is SemanticType.TEMPORAL:
+        # Dates recognised inside a string column need parsing before they can
+        # be summarised; genuine date dtypes are already usable.
+        if schema.temporal_format is not None:
+            series = series.str.to_datetime(schema.temporal_format, strict=False)
         out.temporal = temporal_stats(series)
     elif schema.semantic is SemanticType.TEXT:
         out.text = text_stats(series)

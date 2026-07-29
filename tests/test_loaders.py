@@ -98,6 +98,22 @@ def test_zstd_refuses_with_a_reason(samples: dict[str, Path]) -> None:
         load(sniff(samples["zstd_csv"]))
 
 
+def test_unparseable_dates_do_not_sink_the_whole_file(tmp_path: Path) -> None:
+    """polars' try_parse_dates aborts the read on the first date it dislikes.
+
+    A file whose dates it cannot handle must still load, with those values left
+    as strings, rather than failing outright.
+    """
+    path = tmp_path / "sales.csv"
+    path.write_text(
+        "id,Date,amount\n1,04/01/10 00:00:00,10\n2,07/01/10 00:00:00,20\n3,11/01/11 00:00:00,30\n",
+        encoding="utf-8",
+    )
+    frame = load(sniff(path)).collect()
+    assert frame.height == 3
+    assert frame["Date"].dtype == pl.String
+
+
 def test_lying_extension_still_loads_correctly(samples: dict[str, Path]) -> None:
     """A parquet file named .csv loads as parquet, because sniff said so."""
     frame = load(sniff(samples["parquet_as_csv"])).collect()

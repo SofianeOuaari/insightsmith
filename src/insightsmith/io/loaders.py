@@ -138,7 +138,11 @@ def _load_delimited(spec: SourceSpec, payload: bytes | None) -> pl.LazyFrame:
         "quote_char": dialect.quotechar,
         "comment_prefix": dialect.comment_prefix,
         "decimal_comma": dialect.decimal == ",",
-        "try_parse_dates": True,
+        # NOT try_parse_dates=True. polars infers a datetime column from the first
+        # rows and then hard-fails the entire read on the first value its parser
+        # cannot handle — "04/01/10 00:00:00" makes an otherwise fine file
+        # unreadable. Dates arrive as strings and profiling infers the format,
+        # which can report an ambiguous one instead of silently picking.
         "infer_schema_length": 10_000,
     }
     if payload is not None:

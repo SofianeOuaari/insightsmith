@@ -100,6 +100,15 @@ def column_issues(frame: pl.DataFrame, schemas: list[ColumnSchema]) -> list[Issu
         series = frame[schema.name]
         issues.extend(_null_issues(schema.name, series, height))
         issues.extend(_shape_issues(schema, series, height))
+        if schema.temporal_ambiguous and schema.temporal_format is not None:
+            issues.append(
+                Issue(
+                    "ambiguous_date_format",
+                    f"day-first and month-first both fit; read as {schema.temporal_format}. "
+                    f"Check before trusting anything grouped by this column",
+                    column=schema.name,
+                )
+            )
     return issues
 
 

@@ -9,7 +9,12 @@ import pytest
 
 from insightsmith.io.sniff import sniff
 from insightsmith.profiling import profile
-from insightsmith.profiling.quality import Severity, duplicate_counts, outlier_counts
+from insightsmith.profiling.quality import (
+    Severity,
+    column_issues,
+    duplicate_counts,
+    outlier_counts,
+)
 from insightsmith.profiling.schema import SemanticType, candidate_keys, infer_schema
 from insightsmith.profiling.stats import categorical_stats, numeric_stats, text_stats
 
@@ -42,6 +47,46 @@ def test_semantic_types() -> None:
     assert got["revenue"] is SemanticType.NUMERIC
     assert got["active"] is SemanticType.BOOLEAN
     assert got["signed"] is SemanticType.TEMPORAL
+
+
+def test_dates_in_a_string_column_are_recognised() -> None:
+    frame = pl.DataFrame({"when": ["2024-01-31", "2024-02-29", "2024-03-15", "2024-04-01"]})
+    schema = infer_schema(frame)[0]
+    assert schema.semantic is SemanticType.TEMPORAL
+    assert schema.temporal_format == "%Y-%m-%d"
+    assert not schema.temporal_ambiguous
+
+
+def test_four_digit_year_directive_cannot_claim_a_two_digit_year() -> None:
+    """%Y consumes "10" and yields the year 10 AD; the format must be rejected."""
+    frame = pl.DataFrame({"when": ["04/01/10 00:00:00", "07/01/10 00:00:00", "11/01/11 00:00:00"]})
+    schema = infer_schema(frame)[0]
+    assert schema.temporal_format is not None
+    assert "%y" in schema.temporal_format
+    parsed = frame["when"].str.to_datetime(schema.temporal_format, strict=False)
+    assert parsed.dt.year().min() == 2010
+
+
+def test_ambiguous_day_and_month_order_is_flagged() -> None:
+    """04/01 is either the 4th of January or the 1st of April. Say so."""
+    frame = pl.DataFrame({"when": ["04/01/10 00:00:00", "07/01/10 00:00:00", "11/01/11 00:00:00"]})
+    schema = infer_schema(frame)[0]
+    assert schema.temporal_ambiguous
+    issues = column_issues(frame, [schema])
+    assert any(i.kind == "ambiguous_date_format" for i in issues)
+
+
+def test_unambiguous_day_first_is_not_flagged() -> None:
+    """A day component above 12 settles the order, so there is nothing to warn about."""
+    frame = pl.DataFrame({"when": ["25/01/2024", "13/02/2024", "28/03/2024"]})
+    schema = infer_schema(frame)[0]
+    assert schema.temporal_format == "%d/%m/%Y"
+    assert not schema.temporal_ambiguous
+
+
+def test_ordinary_strings_are_not_mistaken_for_dates() -> None:
+    frame = pl.DataFrame({"sku": ["ab-12", "cd-34", "ef-56", "gh-78"]})
+    assert infer_schema(frame)[0].semantic is not SemanticType.TEMPORAL
 
 
 def test_candidate_keys_exclude_floats() -> None:

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "insightsmith"
-version = "0.1.1"
+version = "0.2.0"
 description = "Agentic data consultant that runs on your own hardware"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,6 +37,7 @@ dependencies = [
   "typer>=0.12",
   "rich>=13.7",
   "charset-normalizer>=3.3",
+  "psutil>=5.9",
 ]
 
 # Extras arrive with the milestone that needs them: viz (0.6.0), gemini/litellm
@@ -62,6 +63,7 @@ dev = [
   "pytest-cov>=5.0",
   "hypothesis>=6.100",
   "mypy>=1.10",
+  "types-psutil>=6.0",
   "ruff>=0.6",
   "pre-commit>=3.7",
   "xlsxwriter>=3.2",  # test-only: writes the xlsx fixtures fastexcel then reads

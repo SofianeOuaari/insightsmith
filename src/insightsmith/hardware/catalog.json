@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "note": "Architecture figures are read from Ollama's /api/show model_info. Entries marked source 'verified' were read from a running Ollama; do not add entries by guessing layer or KV-head counts, because the KV-cache estimate depends on them directly.",
+  "bytes_per_param": {
+    "fp16": 2.0,
+    "Q8_0": 1.06,
+    "Q6_K": 0.82,
+    "Q5_K_M": 0.7,
+    "Q4_K_M": 0.6,
+    "Q4_0": 0.6,
+    "Q3_K_M": 0.48
+  },
+  "models": [
+    {
+      "tag": "qwen3:8b",
+      "architecture": "qwen3",
+      "params_b": 8.2,
+      "n_layers": 36,
+      "n_heads": 32,
+      "n_kv_heads": 8,
+      "head_dim": 128,
+      "context_length": 40960,
+      "default_quant": "Q4_K_M",
+      "license": "apache-2.0",
+      "roles": ["planner", "reasoner", "cheap"],
+      "tier": "balanced",
+      "source": "verified"
+    },
+    {
+      "tag": "deepseek-r1:8b",
+      "architecture": "qwen3",
+      "params_b": 8.2,
+      "n_layers": 36,
+      "n_heads": 32,
+      "n_kv_heads": 8,
+      "head_dim": 128,
+      "context_length": 131072,
+      "default_quant": "Q4_K_M",
+      "license": "mit",
+      "roles": ["reasoner", "planner"],
+      "tier": "balanced",
+      "source": "verified"
+    },
+    {
+      "tag": "mistral:latest",
+      "architecture": "llama",
+      "params_b": 7.2,
+      "n_layers": 32,
+      "n_heads": 32,
+      "n_kv_heads": 8,
+      "head_dim": 128,
+      "context_length": 32768,
+      "default_quant": "Q4_K_M",
+      "license": "apache-2.0",
+      "roles": ["planner", "cheap"],
+      "tier": "balanced",
+      "source": "verified"
+    },
+    {
+      "tag": "deepseek-coder:6.7b",
+      "architecture": "llama",
+      "params_b": 7.0,
+      "n_layers": 32,
+      "n_heads": 32,
+      "n_kv_heads": 32,
+      "head_dim": 128,
+      "context_length": 16384,
+      "default_quant": "Q4_0",
+      "license": "deepseek",
+      "roles": ["coder"],
+      "tier": "balanced",
+      "source": "verified",
+      "note": "No GQA: 32 KV heads means a KV cache four times larger than a GQA model of the same depth."
+    },
+    {
+      "tag": "nomic-embed-text:latest",
+      "architecture": "nomic-bert",
+      "params_b": 0.137,
+      "n_layers": 12,
+      "n_heads": 12,
+      "n_kv_heads": 12,
+      "head_dim": 64,
+      "context_length": 2048,
+      "default_quant": "fp16",
+      "license": "apache-2.0",
+      "roles": ["embed"],
+      "tier": "small",
+      "source": "verified"
+    }
+  ]
+}

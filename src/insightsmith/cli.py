@@ -17,6 +17,14 @@ from rich.table import Table
 
 from insightsmith import __version__
 from insightsmith.errors import InsightsmithError
+from insightsmith.hardware.accel import Accelerator, detect_accelerators, detect_installed_models
+from insightsmith.hardware.probe import SystemInfo, probe_system
+from insightsmith.hardware.recommend import (
+    DEFAULT_CONTEXT,
+    Recommendation,
+    load_catalog,
+    recommend,
+)
 from insightsmith.io.sniff import CONFIDENCE_THRESHOLD, Compression, SourceSpec, sniff
 from insightsmith.profiling import ColumnProfile, Profile, profile
 from insightsmith.profiling.quality import Severity
@@ -24,7 +32,10 @@ from insightsmith.profiling.quality import Severity
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="Agentic data consultant. 0.1.0 ships the no-LLM foundation: detect, load, profile.",
+    help=(
+        "Agentic data consultant. Ships the no-LLM foundation so far: detect, load and "
+        "profile data, and size local models against your hardware."
+    ),
 )
 console = Console()
 errors = Console(stderr=True)
@@ -65,6 +76,99 @@ def look(
         console.print_json(json.dumps(_as_dict(result), default=str))
         return
     _render(result)
+
+
+@app.command()
+def doctor(
+    context: Annotated[
+        int, typer.Option("--context", "-c", help="Context length to size the KV cache for.")
+    ] = DEFAULT_CONTEXT,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the report as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Probe this machine and recommend models that actually fit."""
+    system = probe_system()
+    accelerators = detect_accelerators(system)
+    catalog = load_catalog()
+    installed = detect_installed_models()
+    picks = recommend(system, accelerators, catalog, context=context, installed=installed)
+
+    if as_json:
+        payload = {
+            "system": _as_dict(system),
+            "accelerators": _as_dict(accelerators),
+            "context": context,
+            "installed": installed,
+            "recommendations": _as_dict(picks),
+        }
+        console.print_json(json.dumps(payload, default=str))
+        return
+
+    console.print(Panel(_machine_lines(system, accelerators), title="machine", expand=False))
+    if not picks:
+        console.print("[yellow]nothing in the catalog fits this machine[/]")
+        return
+    console.print(_recommend_table(picks, context))
+    console.print(
+        "[dim]Throughput is estimated from published peak memory bandwidth, "
+        "not measured on this machine.[/]"
+    )
+
+
+def _machine_lines(system: SystemInfo, accelerators: list[Accelerator]) -> str:
+    cpu = system.cpu
+    cores = (
+        f"{cpu.physical_cores} cores / {cpu.logical_cores} threads"
+        if cpu.physical_cores and cpu.logical_cores
+        else "unknown core count"
+    )
+    lines = [
+        f"[bold]os[/]      {system.os_name} {system.os_release} ({system.arch})",
+        f"[bold]cpu[/]     {cpu.model} — {cores}",
+        f"[bold]memory[/]  {system.memory.total_gb:.1f} GB total, "
+        f"{system.memory.available_gb:.1f} GB available",
+        f"[bold]disk[/]    {system.disk_free_gb:.1f} GB free",
+    ]
+    if not accelerators:
+        lines.append("[yellow]gpu[/]     none detected — models will run on the CPU")
+    for device in accelerators:
+        memory = f"{device.memory_total_gb:.1f} GB" if device.memory_total_gb else "unknown memory"
+        suffix = " (unified)" if device.unified else ""
+        low = "" if device.confidence >= 1.0 else "  [yellow](low confidence)[/]"
+        lines.append(f"[bold]gpu[/]     {device.name} — {memory}{suffix}{low}")
+    return "\n".join(lines)
+
+
+def _recommend_table(picks: list[Recommendation], context: int) -> Table:
+    table = Table(title=f"recommended models at {context:,} context", header_style="bold")
+    for name, justify in (
+        ("role", "left"),
+        ("model", "left"),
+        ("weights", "right"),
+        ("kv cache", "right"),
+        ("total", "right"),
+        ("placement", "left"),
+        ("tok/s", "right"),
+    ):
+        table.add_column(name, justify=justify)  # type: ignore[arg-type]
+
+    for pick in picks:
+        fit = pick.fit
+        placement = fit.placement.value
+        if fit.n_gpu_layers is not None:
+            placement += f" ({fit.n_gpu_layers} layers)"
+        speed = "unknown" if fit.tokens_per_second is None else f"~{fit.tokens_per_second:.0f}"
+        table.add_row(
+            pick.role,
+            pick.model.tag + ("  [green]*[/]" if pick.installed else ""),
+            f"{fit.weights_gb:.2f} GB",
+            f"{fit.kv_cache_gb:.2f} GB",
+            f"{fit.total_gb:.2f} GB",
+            placement,
+            speed,
+        )
+    return table
 
 
 def _fail(message: object) -> NoReturn:

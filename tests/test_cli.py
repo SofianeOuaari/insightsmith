@@ -73,6 +73,82 @@ def test_missing_file_exits_nonzero(tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
+def test_doctor_runs_on_whatever_machine_it_finds(monkeypatch) -> None:
+    """No hardware is touched: the collectors are stubbed, the maths is real."""
+    from insightsmith.hardware.probe import CpuInfo, MemoryInfo, SystemInfo
+
+    system = SystemInfo(
+        os_name="Linux",
+        os_release="6.8.0",
+        arch="x86_64",
+        cpu=CpuInfo(model="Test CPU", physical_cores=8, logical_cores=16),
+        memory=MemoryInfo(total_gb=32.0, available_gb=16.0),
+        disk_free_gb=500.0,
+    )
+    monkeypatch.setattr("insightsmith.cli.probe_system", lambda: system)
+    monkeypatch.setattr("insightsmith.cli.detect_accelerators", lambda _: [])
+    monkeypatch.setattr("insightsmith.cli.detect_installed_models", list)
+
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "Test CPU" in result.stdout
+    assert "none detected" in result.stdout
+    assert "kv cache" in result.stdout
+
+
+def test_doctor_json(monkeypatch) -> None:
+    from insightsmith.hardware.probe import CpuInfo, MemoryInfo, SystemInfo
+
+    system = SystemInfo(
+        os_name="Linux",
+        os_release="6.8.0",
+        arch="x86_64",
+        cpu=CpuInfo(model="Test CPU", physical_cores=8, logical_cores=16),
+        memory=MemoryInfo(total_gb=32.0, available_gb=16.0),
+        disk_free_gb=500.0,
+    )
+    monkeypatch.setattr("insightsmith.cli.probe_system", lambda: system)
+    monkeypatch.setattr("insightsmith.cli.detect_accelerators", lambda _: [])
+    monkeypatch.setattr("insightsmith.cli.detect_installed_models", list)
+
+    result = runner.invoke(app, ["doctor", "--json", "--context", "4096"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["context"] == 4096
+    assert payload["system"]["cpu"]["model"] == "Test CPU"
+    assert payload["recommendations"]
+    fit = payload["recommendations"][0]["fit"]
+    assert fit["weights_gb"] > 0
+    assert fit["kv_cache_gb"] > 0
+
+
+def test_doctor_says_unknown_rather_than_inventing_a_throughput(monkeypatch) -> None:
+    """An unlisted device must print "unknown", never a plausible-looking number."""
+    from insightsmith.hardware.accel import Accelerator, Vendor
+    from insightsmith.hardware.probe import CpuInfo, MemoryInfo, SystemInfo
+
+    system = SystemInfo(
+        os_name="Linux",
+        os_release="6.8.0",
+        arch="x86_64",
+        cpu=CpuInfo(model="Test CPU", physical_cores=8, logical_cores=16),
+        memory=MemoryInfo(total_gb=32.0, available_gb=16.0),
+        disk_free_gb=500.0,
+    )
+    unlisted = Accelerator(
+        vendor=Vendor.NVIDIA, name="NVIDIA RTX A2000 Laptop GPU", memory_total_gb=24.0
+    )
+    monkeypatch.setattr("insightsmith.cli.probe_system", lambda: system)
+    monkeypatch.setattr("insightsmith.cli.detect_accelerators", lambda _: [unlisted])
+    monkeypatch.setattr("insightsmith.cli.detect_installed_models", list)
+
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "unknown" in result.stdout
+    # rich wraps the disclaimer, so compare on collapsed whitespace.
+    assert "not measured on this machine" in " ".join(result.stdout.split())
+
+
 def test_unparseable_content_fails_cleanly_not_with_a_traceback(tmp_path: Path) -> None:
     """Text that sniffs as CSV but will not parse must not dump a polars stack."""
     path = tmp_path / "script.sh"

@@ -1,0 +1,11 @@
+{
+  "_comment": "SYNTHETIC — hand-written from the documented `system_profiler SPHardwareDataType -json` shape. NOT captured from hardware; no Mac was available. Replace with a real capture if you have one.",
+  "SPHardwareDataType": [
+    {
+      "chip_type": "Apple M2 Max",
+      "machine_model": "Mac14,6",
+      "number_processors": "proc 12:8:4",
+      "physical_memory": "64 GB"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "_comment": "SYNTHETIC — hand-written from the documented `rocm-smi --showmeminfo vram --json` shape. NOT captured from hardware; no AMD GPU was available. Replace with a real capture if you have one.",
+  "card0": {
+    "Card Series": "Radeon RX 7900 XTX",
+    "VRAM Total Memory (B)": "25753026560",
+    "VRAM Total Used Memory (B)": "1073741824"
+  },
+  "card1": {
+    "Card Series": "Radeon RX 7900 XTX",
+    "VRAM Total Memory (B)": "25753026560",
+    "VRAM Total Used Memory (B)": "536870912"
+  }
+}

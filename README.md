@@ -10,15 +10,14 @@ An agentic data consultant that runs on your own machine.
 
 ---
 
-> ### 0.1.0 is the foundation, not the whole thing
+> ### The foundation, not yet the whole thing
 >
-> This release ships the parts that need no LLM: **format detection, loading and
-> profiling**, behind `ismith look`. It is useful on its own — point it at a file
-> and it tells you what the file really is and what's wrong with the data.
+> Shipped so far: **format detection, loading and profiling** behind `ismith look`,
+> and **hardware probing with model-fit recommendation** behind `ismith doctor`.
+> Both are useful on their own, and neither talks to a model or the network.
 >
 > The agentic half — proposing analyses, writing and sandbox-executing code,
-> critiquing the statistics, writing a report — arrives across 0.4.0–0.8.0.
-> Nothing in this release talks to a model or the network.
+> critiquing the statistics, writing a report — arrives across 0.3.0–0.8.0.
 
 ---
 
@@ -51,6 +50,27 @@ candidate keys: menge
 ```
 
 Add `--json` for the same profile as machine-readable output.
+
+### Which local model fits your machine
+
+```bash
+ismith doctor
+```
+
+Probes CPU, RAM, disk and GPU, then sizes each catalogued model against what it
+finds — **per role**, because routing and planning are different jobs and your
+machine may afford one but not the other.
+
+The arithmetic is the point. Weights come from the quantisation's bytes-per-param;
+the KV cache from `2 × layers × n_kv_heads × head_dim × context × 2 bytes`. Using
+`n_kv_heads` rather than the attention-head count is what makes it right: on a
+4 GB laptop GPU at 8k context, `qwen3:8b` (8 KV heads) needs 1.21 GB of cache
+against 4.92 GB of weights, while `deepseek-coder:6.7b` — same size, but 32 KV
+heads and no grouped-query attention — needs **4.29 GB of cache against 4.20 GB
+of weights**. A rule of thumb based on parameter count alone cannot tell you that.
+
+Models that don't fit outright get a partial-offload layer count rather than a
+shrug, and anything larger than your RAM is excluded with a reason.
 
 **Format detection doesn't trust the extension.** A three-stage cascade — extension
 hint, then magic bytes, then a text-dialect probe — where each stage can veto the
@@ -126,6 +146,11 @@ Worth stating plainly, in advance:
   them, so such columns may load as strings.
 - **No XML row-unit discovery, and zstd payloads aren't inspected** (no stdlib
   decompressor before Python 3.14).
+- **Throughput figures are estimates, not benchmarks.** `ismith doctor` derives
+  tok/s from published peak memory bandwidth, which no real decode loop reaches.
+  Devices missing from that table report `unknown` rather than a plausible
+  substitute, and the catalog only contains models whose layer and KV-head counts
+  were read from a running Ollama — never guessed.
 
 And for the releases still to come: LLMs write wrong code confidently, the sandbox
 will be defense-in-depth rather than a security boundary, and a statistical critic

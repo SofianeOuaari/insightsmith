@@ -1,0 +1,12 @@
+NAME                        ID              SIZE      MODIFIED     
+nomic-embed-text:latest     0a109f422b47    274 MB    6 months ago    
+deepseek-coder:6.7b         ce298d984115    3.8 GB    7 months ago    
+mistral:latest              6577803aa9a0    4.4 GB    7 months ago    
+qwen3:8b                    500a1f067a9f    5.2 GB    8 months ago    
+deepseek-r1:8b              6995872bfe4c    5.2 GB    8 months ago    
+deepseek-v3.1:671b-cloud    d3749919e45f    -         8 months ago    
+gpt-oss:20b-cloud           875e8e3a629a    -         8 months ago    
+embeddinggemma:latest       85462619ee72    621 MB    8 months ago    
+llama3:8b                   365c0bd3c000    4.7 GB    8 months ago    
+mxbai-embed-large:latest    468836162de7    669 MB    8 months ago    
+llama3.2:latest             a80c4f17acd5    2.0 GB    9 months ago    

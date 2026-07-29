@@ -1,0 +1,2 @@
+00:02.0 VGA compatible controller: Intel Corporation TigerLake-H GT1 [UHD Graphics] (rev 01)
+01:00.0 VGA compatible controller: NVIDIA Corporation GA107GLM [RTX A2000 Mobile] (rev a1)

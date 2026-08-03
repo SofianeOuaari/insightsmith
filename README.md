@@ -12,12 +12,13 @@ An agentic data consultant that runs on your own machine.
 
 > ### The foundation, not yet the whole thing
 >
-> Shipped so far: **format detection, loading and profiling** behind `ismith look`,
-> and **hardware probing with model-fit recommendation** behind `ismith doctor`.
-> Both are useful on their own, and neither talks to a model or the network.
+> Shipped so far: **format detection, loading and profiling** (`ismith look`),
+> **hardware probing with model-fit recommendation** (`ismith doctor`), and the
+> **provider layer** that routes roles to local or cloud models (`ismith models`).
 >
-> The agentic half — proposing analyses, writing and sandbox-executing code,
-> critiquing the statistics, writing a report — arrives across 0.3.0–0.8.0.
+> The agents themselves — proposing analyses, writing and sandbox-executing code,
+> critiquing the statistics, writing a report — arrive across 0.4.0–0.8.0. Nothing
+> here sends your data anywhere unless you configure a remote provider yourself.
 
 ---
 
@@ -72,6 +73,43 @@ of weights**. A rule of thumb based on parameter count alone cannot tell you tha
 Models that don't fit outright get a partial-offload layer count rather than a
 shrug, and anything larger than your RAM is excluded with a reason.
 
+### Wiring up a model
+
+```bash
+ismith models
+```
+
+Shows what each role resolves to, whether it stays on your machine, and **how it
+will be asked for structured output**. Configure it in `~/.insightsmith/config.toml`:
+
+```toml
+[roles]
+planner = "ollama/qwen3:8b"
+coder   = "ollama/qwen2.5-coder:7b"
+cheap   = "ollama/qwen3:4b"
+
+[budget]
+max_usd_per_session = 0.50
+local_only = true
+```
+
+One class covers every backend that speaks the OpenAI wire format — OpenAI,
+OpenRouter, DeepInfra, Together, Groq, Fireworks, Mistral, Gemini's compat
+endpoint, and local vLLM / llama.cpp / LM Studio — because they differ only by
+base URL and key. Ollama is written natively instead, since `/api/show`,
+`/api/ps` and `keep_alive` are the whole reason to run locally.
+
+**Capabilities are read, not assumed.** Ollama reports whether a model supports
+tool-calling, so the router picks its approach up front rather than failing
+mid-run: tool-calling where available, JSON mode next, and otherwise prompted
+JSON with a bounded retry that feeds the parse failure back. Small models wrap
+JSON in prose and code fences no matter how firmly told not to, so that path is
+the common case, not an edge case.
+
+**`local_only = true` is a hard failure, not a warning.** Point a role at a
+remote provider with it set and loading the config raises, naming the offending
+role. A privacy switch that only warned would not be a privacy switch.
+
 **Format detection doesn't trust the extension.** A three-stage cascade — extension
 hint, then magic bytes, then a text-dialect probe — where each stage can veto the
 one before it. A Parquet file named `.csv` is loaded as Parquet, and you're told
@@ -106,7 +144,7 @@ for issue in result.issues:
 Polars `LazyFrame` is the internal representation throughout, so Parquet, Arrow,
 NDJSON and UTF-8 CSV are scanned rather than loaded.
 
-**Formats loadable in 0.1.0:** csv, tsv, xlsx/xlsm (with `[excel]`), xls, parquet,
+**Formats loadable today:** csv, tsv, xlsx/xlsm (with `[excel]`), xls, parquet,
 feather/arrow, json, jsonl/ndjson. Detected-but-not-yet-loadable formats — sqlite,
 duckdb, xml, html, ods, orc, hdf5, spss, stata, sas — say so, and name the release
 that will handle them.
@@ -119,8 +157,9 @@ pip install insightsmith[excel]     # + xlsx / xls
 pip install insightsmith[pandas]    # + a .to_pandas() escape hatch
 ```
 
-The base install is four dependencies — polars, typer, rich, charset-normalizer.
-No torch, no pandas, no agent framework. Extras stay optional on purpose.
+The base install is six dependencies — polars, typer, rich, charset-normalizer,
+psutil and httpx (plus a TOML backport on Python 3.10 only). No torch, no pandas,
+no agent framework. Extras stay optional on purpose.
 
 ## What it won't do
 

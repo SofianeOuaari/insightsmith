@@ -3,6 +3,25 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.3.0] - 2026-08-03
+
+### Build and packaging
+
+- Add httpx and tomli, bump to 0.3.0, document the provider layer
+
+### Features
+
+- **llm**: Add the provider layer, config and capability-aware router
+- **cli**: Add `ismith models`
+
+### Housekeeping
+
+- Ignore the local example dataset
+
+### Testing
+
+- Fail any test that opens a real HTTP connection
+
 ## [0.2.0] - 2026-07-29
 
 ### Build and packaging

@@ -24,6 +24,25 @@ hypothesis_settings.register_profile("dev", max_examples=200, deadline=None)
 hypothesis_settings.register_profile("stress", max_examples=3000, deadline=None)
 hypothesis_settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 
+
+@pytest.fixture(autouse=True)
+def _forbid_real_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail loudly if any test opens a real connection.
+
+    CLAUDE.md requires the network to be mocked, but an un-mocked call to
+    localhost silently succeeds on a developer machine running Ollama and only
+    misbehaves elsewhere. httpx.MockTransport never reaches this code path, so
+    mocked tests are unaffected and unmocked ones fail immediately.
+    """
+
+    def refuse(*_: object, **__: object) -> None:
+        raise AssertionError(
+            "a test attempted a real HTTP request; use httpx.MockTransport instead"
+        )
+
+    monkeypatch.setattr("httpx.HTTPTransport.handle_request", refuse)
+
+
 _OOXML_SHEET = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
 _OOXML_DOC = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
 

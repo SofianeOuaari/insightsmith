@@ -16,6 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from insightsmith import __version__
+from insightsmith.config import load_config
 from insightsmith.errors import InsightsmithError
 from insightsmith.hardware.accel import Accelerator, detect_accelerators, detect_installed_models
 from insightsmith.hardware.probe import SystemInfo, probe_system
@@ -26,6 +27,7 @@ from insightsmith.hardware.recommend import (
     recommend,
 )
 from insightsmith.io.sniff import CONFIDENCE_THRESHOLD, Compression, SourceSpec, sniff
+from insightsmith.llm.router import Router
 from insightsmith.profiling import ColumnProfile, Profile, profile
 from insightsmith.profiling.quality import Severity
 
@@ -114,6 +116,80 @@ def doctor(
         "[dim]Throughput is estimated from published peak memory bandwidth, "
         "not measured on this machine.[/]"
     )
+
+
+@app.command()
+def models(
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the report as JSON instead of a table.")
+    ] = False,
+) -> None:
+    """Show which model each role resolves to, and how it will be asked."""
+    try:
+        config = load_config()
+    except InsightsmithError as exc:
+        _fail(exc)
+
+    rows: list[dict[str, Any]] = []
+    router = Router(config=config)
+    for role in sorted(config.roles):
+        entry: dict[str, Any] = {"role": role, "model": config.roles[role]}
+        try:
+            route = router.route(role)
+        except InsightsmithError as exc:
+            entry |= {"reachable": False, "detail": str(exc)}
+        else:
+            entry |= {
+                "reachable": True,
+                "local": route.local,
+                "strategy": route.strategy.value,
+                "context_window": route.capabilities.context_window,
+                "tool_calling": route.capabilities.tool_calling,
+            }
+        rows.append(entry)
+
+    if as_json:
+        console.print_json(
+            json.dumps(
+                {
+                    "config_path": str(config.path) if config.path else None,
+                    "local_only": config.budget.local_only,
+                    "roles": rows,
+                },
+                default=str,
+            )
+        )
+        return
+
+    source = str(config.path) if config.path else "defaults (no config file)"
+    console.print(f"config: {source}")
+    if config.budget.local_only:
+        console.print("[green]local_only is on — remote providers are refused[/]")
+    console.print(_models_table(rows))
+
+
+def _models_table(rows: list[dict[str, Any]]) -> Table:
+    table = Table(title="roles", header_style="bold")
+    for name in ("role", "model", "where", "context", "structured output"):
+        table.add_column(name)
+    for row in rows:
+        if not row["reachable"]:
+            table.add_row(
+                row["role"],
+                row["model"],
+                "[red]unreachable[/]",
+                "-",
+                f"[dim]{row['detail'][:60]}[/]",
+            )
+            continue
+        table.add_row(
+            row["role"],
+            row["model"],
+            "[green]local[/]" if row["local"] else "[yellow]remote[/]",
+            f"{row['context_window']:,}",
+            row["strategy"].replace("_", " "),
+        )
+    return table
 
 
 def _machine_lines(system: SystemInfo, accelerators: list[Accelerator]) -> str:

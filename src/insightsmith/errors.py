@@ -6,8 +6,11 @@ Every one carries an actionable message: what was refused, and what to do next.
 from __future__ import annotations
 
 __all__ = [
+    "BudgetError",
+    "ConfigError",
     "InsightsmithError",
     "MissingDependencyError",
+    "ProviderError",
     "UnsupportedFormatError",
 ]
 
@@ -25,6 +28,22 @@ class UnsupportedFormatError(InsightsmithError):
             message = f"{message} ({detail})"
         super().__init__(message)
         self.format = fmt
+
+
+class ConfigError(InsightsmithError):
+    """Configuration is malformed, or contradicts itself.
+
+    Raised in particular when ``local_only`` is set while a role points at a
+    remote provider — a privacy guarantee that only warned would be worthless.
+    """
+
+
+class ProviderError(InsightsmithError):
+    """A model backend was unreachable, misconfigured, or answered unusably."""
+
+
+class BudgetError(InsightsmithError):
+    """The session's spending cap was reached."""
 
 
 class MissingDependencyError(InsightsmithError):

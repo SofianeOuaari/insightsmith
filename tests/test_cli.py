@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from insightsmith import __version__
@@ -147,6 +148,92 @@ def test_doctor_says_unknown_rather_than_inventing_a_throughput(monkeypatch) -> 
     assert "unknown" in result.stdout
     # rich wraps the disclaimer, so compare on collapsed whitespace.
     assert "not measured on this machine" in " ".join(result.stdout.split())
+
+
+@pytest.fixture
+def stub_ollama(monkeypatch):
+    """Replace every Ollama construction with a MockTransport-backed one.
+
+    load_config merges defaults, so roles the test config never mentions still
+    resolve to ollama/... — stubbing only the configured role would leave those
+    opening real sockets.
+    """
+    import httpx
+
+    from insightsmith.llm.ollama import OllamaProvider
+
+    clients: list[httpx.Client] = []
+
+    def install(show: dict) -> None:
+        client = httpx.Client(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, json=show))
+        )
+        clients.append(client)
+        monkeypatch.setattr(
+            "insightsmith.llm.registry.OllamaProvider", lambda **_: OllamaProvider(client=client)
+        )
+
+    yield install
+    for client in clients:
+        client.close()
+
+
+def test_models_lists_roles(tmp_path: Path, monkeypatch, stub_ollama) -> None:
+    stub_ollama(
+        {"capabilities": ["completion", "tools"], "model_info": {"q.context_length": 40960}}
+    )
+    config = tmp_path / "config.toml"
+    config.write_text('[roles]\nplanner = "ollama/qwen3:8b"\n', encoding="utf-8")
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(config))
+
+    result = runner.invoke(app, ["models"])
+    assert result.exit_code == 0
+    assert "planner" in result.stdout
+    assert "local" in result.stdout
+    assert "tool calling" in result.stdout
+
+
+def test_models_json(tmp_path: Path, monkeypatch, stub_ollama) -> None:
+    stub_ollama({"capabilities": ["completion"], "model_info": {"q.context_length": 8192}})
+    config = tmp_path / "config.toml"
+    config.write_text('[roles]\nplanner = "ollama/llama3.2:3b"\n', encoding="utf-8")
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(config))
+
+    result = runner.invoke(app, ["models", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    planner = next(r for r in payload["roles"] if r["role"] == "planner")
+    # No tool-calling, so it must have chosen a degraded strategy rather than fail.
+    assert planner["tool_calling"] is False
+    assert planner["strategy"] in {"json_mode", "prompted_json"}
+
+
+def test_models_reports_local_only_violation_and_exits_nonzero(tmp_path: Path, monkeypatch) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        '[roles]\nplanner = "openai/gpt-4o-mini"\n\n[budget]\nlocal_only = true\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(config))
+
+    result = runner.invoke(app, ["models"])
+    assert result.exit_code == 1
+    assert "local_only" in result.output
+
+
+def test_models_marks_an_unreachable_provider_without_crashing(
+    tmp_path: Path, monkeypatch, stub_ollama
+) -> None:
+    """A missing API key must be reported per role, not abort the whole command."""
+    stub_ollama({"capabilities": ["completion"], "model_info": {"q.context_length": 8192}})
+    config = tmp_path / "config.toml"
+    config.write_text('[roles]\nplanner = "openai/gpt-4o-mini"\n', encoding="utf-8")
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(config))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    result = runner.invoke(app, ["models"])
+    assert result.exit_code == 0
+    assert "unreachable" in result.stdout
 
 
 def test_unparseable_content_fails_cleanly_not_with_a_traceback(tmp_path: Path) -> None:

@@ -13,12 +13,13 @@ An agentic data consultant that runs on your own machine.
 > ### The foundation, not yet the whole thing
 >
 > Shipped so far: **format detection, loading and profiling** (`ismith look`),
-> **hardware probing with model-fit recommendation** (`ismith doctor`), and the
-> **provider layer** that routes roles to local or cloud models (`ismith models`).
+> **hardware probing with model-fit recommendation** (`ismith doctor`), the
+> **provider layer** routing roles to local or cloud models (`ismith models`), and
+> the **dataset card plus ideation** behind `ismith look --ideas`.
 >
-> The agents themselves — proposing analyses, writing and sandbox-executing code,
-> critiquing the statistics, writing a report — arrive across 0.4.0–0.8.0. Nothing
-> here sends your data anywhere unless you configure a remote provider yourself.
+> Still to come across 0.5.0–0.8.0: sandboxed code execution, visualisation, the
+> statistical critic, and reports. Nothing sends your data anywhere unless you
+> configure a remote provider yourself.
 
 ---
 
@@ -72,6 +73,31 @@ of weights**. A rule of thumb based on parameter count alone cannot tell you tha
 
 Models that don't fit outright get a partial-offload layer count rather than a
 shrug, and anything larger than your RAM is excluded with a reason.
+
+### Asking a model what's worth analysing
+
+```bash
+ismith look data/sales.csv --ideas    # ranked analyses
+ismith look data/sales.csv --card     # exactly what the model will be shown
+```
+
+**The dataframe is never pasted into a prompt.** Everything an agent sees arrives
+through a *dataset card*: a compact JSON summary of schema, per-column statistics,
+quality flags, a correlation shortlist, and a few stratified example rows with
+obvious PII masked. Three things follow, and they are the reason for the design:
+
+- **Token cost is flat regardless of file size.** A 589 KB, 4248-row, 20-column
+  file produces a 4.8 KB card — and so would a 40 GB one. That is what makes an
+  8B local model workable.
+- **No raw records leave the machine.** Sensitive columns are redacted by name,
+  recognisable values by pattern.
+- **The card hashes**, so the same data yields the same plan and results cache.
+
+Ideas come back ranked, each naming the columns it needs — and **any idea
+referencing a column the card doesn't contain is discarded before you see it**.
+That one check removes most hallucination for the price of a set-membership test.
+Because the quality notes are on the card too, a model will hedge appropriately:
+given a date column flagged as ambiguous, it proposes parsing it "with caution".
 
 ### Wiring up a model
 
@@ -176,6 +202,13 @@ Worth stating plainly, in advance:
   z-score as well, and both numbers are shown. They disagree usefully.
 - **"Near-duplicate" means one specific thing** — identical once string columns
   are trimmed and case-folded. It is not fuzzy matching.
+- **PII masking is best-effort, not a guarantee.** It catches values that look
+  like contact details or identifiers and blanks columns whose names say they
+  hold personal data. It cannot recognise a person's name in free text, an
+  address split across columns, or an identifier in a format it hasn't seen. If
+  data must not leave the machine, set `local_only` — masking is defence in
+  depth, not a substitute for keeping it local. `--card` shows exactly what would
+  be sent, and `include_examples=False` omits sample values entirely.
 - **Dates are inferred, and `04/01/10` is genuinely ambiguous.** Date columns load
   as strings and the format is inferred afterwards, so a file polars cannot parse
   still loads. Where day-first and month-first fit equally well, the chosen format

@@ -236,6 +236,50 @@ def test_models_marks_an_unreachable_provider_without_crashing(
     assert "unreachable" in result.stdout
 
 
+def test_look_card_shows_what_a_model_would_see(samples: dict[str, Path]) -> None:
+    result = runner.invoke(app, ["look", str(samples["csv"]), "--card"])
+    assert result.exit_code == 0
+    assert "dataset card" in result.stdout
+    assert "hash" in result.stdout
+
+
+def test_look_ideas(tmp_path: Path, monkeypatch, stub_ollama) -> None:
+    import httpx
+
+    from insightsmith.llm.ollama import OllamaProvider
+
+    body = '{"ideas": [{"question": "Which region earns most?", "rationale": "r", '
+    body += '"method": "group by region", "columns": ["region", "revenue"], '
+    body += '"expected_artifact": "chart", "effort": "low"}]}'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "show" in str(request.url):
+            return httpx.Response(
+                200,
+                json={"capabilities": ["completion"], "model_info": {"q.context_length": 8192}},
+            )
+        return httpx.Response(
+            200, json={"model": "m", "message": {"role": "assistant", "content": body}}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(
+        "insightsmith.llm.registry.OllamaProvider", lambda **_: OllamaProvider(client=client)
+    )
+    config = tmp_path / "config.toml"
+    config.write_text('[roles]\nplanner = "ollama/test"\n', encoding="utf-8")
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(config))
+
+    data = tmp_path / "sales.csv"
+    data.write_text("region,revenue\nnorth,120\nsouth,80\neast,95\nwest,60\n", encoding="utf-8")
+    result = runner.invoke(app, ["look", str(data), "--ideas"])
+    client.close()
+
+    assert result.exit_code == 0
+    assert "analysis ideas" in result.stdout
+    assert "Which region earns most?" in result.stdout
+
+
 def test_unparseable_content_fails_cleanly_not_with_a_traceback(tmp_path: Path) -> None:
     """Text that sniffs as CSV but will not parse must not dump a polars stack."""
     path = tmp_path / "script.sh"
@@ -256,7 +300,7 @@ def test_extra_is_named_in_the_missing_dependency_message(monkeypatch, tmp_path:
     def boom(*_: object, **__: object) -> None:
         raise MissingDependencyError("fastexcel", "excel", purpose="reading spreadsheets")
 
-    monkeypatch.setattr("insightsmith.cli.profile", boom)
+    monkeypatch.setattr("insightsmith.cli.profile_with_sample", boom)
     path = tmp_path / "book.csv"
     path.write_text("a,b\n1,2\n", encoding="utf-8")
 

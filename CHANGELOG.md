@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.4.0] - 2026-08-09
+
+### Build and packaging
+
+- Bump to 0.4.0 and document the the dataset card
+
+### Features
+
+- **profiling**: Add the dataset card and best-effort PII masking.
+- **cli**: Add `ismith look --ideas` and --card
+
 ## [0.3.0] - 2026-08-03
 
 ### Build and packaging
@@ -21,6 +32,10 @@ by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 ### Testing
 
 - Fail any test that opens a real HTTP connection
+
+### Chorse
+
+- **release**: V0.3.0
 
 ## [0.2.0] - 2026-07-29
 

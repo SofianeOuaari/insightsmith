@@ -16,6 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from insightsmith import __version__
+from insightsmith.agents.ideation import Idea, IdeationAgent
 from insightsmith.config import load_config
 from insightsmith.errors import InsightsmithError
 from insightsmith.hardware.accel import Accelerator, detect_accelerators, detect_installed_models
@@ -28,7 +29,8 @@ from insightsmith.hardware.recommend import (
 )
 from insightsmith.io.sniff import CONFIDENCE_THRESHOLD, Compression, SourceSpec, sniff
 from insightsmith.llm.router import Router
-from insightsmith.profiling import ColumnProfile, Profile, profile
+from insightsmith.profiling import ColumnProfile, Profile, profile_with_sample
+from insightsmith.profiling.card import build_card
 from insightsmith.profiling.quality import Severity
 
 app = typer.Typer(
@@ -58,12 +60,18 @@ def look(
     as_json: Annotated[
         bool, typer.Option("--json", help="Emit the profile as JSON instead of tables.")
     ] = False,
+    ideas: Annotated[
+        bool, typer.Option("--ideas", help="Ask a model for ranked analysis ideas.")
+    ] = False,
+    show_card: Annotated[
+        bool, typer.Option("--card", help="Print the dataset card a model would see.")
+    ] = False,
 ) -> None:
     """Detect a file's real format, then profile it."""
     spec = None
     try:
         spec = sniff(path)
-        result = profile(spec)
+        result, sample = profile_with_sample(spec)
     except (InsightsmithError, OSError) as exc:
         _fail(exc)
     except PolarsError as exc:
@@ -74,10 +82,53 @@ def look(
             hint = f" (read as {spec.format.value}, {spec.confidence:.0%} confidence)"
         _fail(f"could not parse {path}{hint}: {_first_line(exc)}")
 
+    card = build_card(result, sample) if (ideas or show_card) else None
+    proposals: list[Idea] = []
+    if ideas and card is not None:
+        try:
+            proposals = IdeationAgent(router=Router()).propose(card)
+        except InsightsmithError as exc:
+            _fail(exc)
+
     if as_json:
-        console.print_json(json.dumps(_as_dict(result), default=str))
+        payload: dict[str, Any] = _as_dict(result)
+        if card is not None:
+            payload["card"] = card.to_dict()
+            payload["card_hash"] = card.hash
+        if ideas:
+            payload["ideas"] = [idea.to_dict() for idea in proposals]
+        console.print_json(json.dumps(payload, default=str))
         return
+
     _render(result)
+    if show_card and card is not None:
+        console.print(
+            Panel(
+                card.to_json(indent=2),
+                title=f"dataset card — {card.size_bytes:,} bytes, hash {card.hash}",
+                expand=False,
+            )
+        )
+    if ideas:
+        console.print(_ideas_table(proposals))
+
+
+def _ideas_table(proposals: list[Idea]) -> Table:
+    table = Table(title="analysis ideas", header_style="bold")
+    table.add_column("#", justify="right")
+    table.add_column("question")
+    table.add_column("method")
+    table.add_column("columns")
+    table.add_column("effort")
+    for idea in proposals:
+        table.add_row(
+            str(idea.rank),
+            idea.question,
+            idea.method,
+            ", ".join(idea.columns),
+            idea.effort,
+        )
+    return table
 
 
 @app.command()

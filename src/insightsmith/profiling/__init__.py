@@ -36,6 +36,7 @@ __all__ = [
     "ColumnProfile",
     "Profile",
     "profile",
+    "profile_with_sample",
 ]
 
 #: Sources larger than this are profiled on a sample (design doc §3).
@@ -86,12 +87,36 @@ class Profile:
         return head
 
 
+def profile_with_sample(
+    spec: SourceSpec,
+    *,
+    threshold_bytes: int = SAMPLE_THRESHOLD_BYTES,
+    sample_rows: int = SAMPLE_ROWS,
+) -> tuple[Profile, pl.DataFrame]:
+    """Profile, and also hand back the sample it was computed from.
+
+    The dataset card needs the rows to draw examples and correlations from, and
+    re-reading the source to get them would be both slower and inconsistent.
+    """
+    return _profile(spec, threshold_bytes=threshold_bytes, sample_rows=sample_rows)
+
+
 def profile(
     spec: SourceSpec,
     *,
     threshold_bytes: int = SAMPLE_THRESHOLD_BYTES,
     sample_rows: int = SAMPLE_ROWS,
 ) -> Profile:
+    """Profile the source described by ``spec``."""
+    return _profile(spec, threshold_bytes=threshold_bytes, sample_rows=sample_rows)[0]
+
+
+def _profile(
+    spec: SourceSpec,
+    *,
+    threshold_bytes: int = SAMPLE_THRESHOLD_BYTES,
+    sample_rows: int = SAMPLE_ROWS,
+) -> tuple[Profile, pl.DataFrame]:
     """Profile the source described by ``spec``.
 
     Sources whose file size exceeds ``threshold_bytes`` are sampled down to
@@ -115,7 +140,7 @@ def profile(
     issues = [*table_issues(sample), *column_issues(sample, schemas)]
     columns = [_column_profile(sample, s, estimated) for s in schemas]
 
-    return Profile(
+    result = Profile(
         source=spec,
         n_rows=n_rows,
         n_columns=sample.width,
@@ -125,6 +150,7 @@ def profile(
         issues=issues,
         candidate_keys=candidate_keys(sample),
     )
+    return result, sample
 
 
 def _column_profile(frame: pl.DataFrame, schema: ColumnSchema, estimated: bool) -> ColumnProfile:

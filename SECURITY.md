@@ -29,7 +29,7 @@ VM, a separate unprivileged user — if that is your situation.
 | Layer | What it does | Where it fails |
 |---|---|---|
 | **AST gate** | Allowlists imports and refuses `eval`, `exec`, `compile`, `__import__`, `open`, `getattr`, `globals`, and any `_`-prefixed attribute | Static analysis only. It cannot reason about values, and a novel route through an allowed library is not covered |
-| **Separate process** | `sys.executable -I`, fresh temp directory, scrubbed environment, stdin closed | Same user, same filesystem permissions as you |
+| **Separate process** | `sys.executable -I`, fresh temp directory, scrubbed environment (no credentials, no proxies, no `PYTHON*`), stdin closed | Same user, same filesystem permissions as you |
 | **Wall-clock timeout** | Kills after 60s by default | — |
 | **`RLIMIT_CPU`** | Terminates a looping snippet | **POSIX only** |
 | **`RLIMIT_AS`** | Caps address space at 4 GB | **Linux only** — see below |

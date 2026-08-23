@@ -227,11 +227,33 @@ def _spawn(work: Path, limits: Limits) -> tuple[subprocess.CompletedProcess[str]
 
 def _scrubbed_env() -> dict[str, str]:
     """A minimal environment: no credentials, no proxies, no PYTHON* settings."""
-    keep = ("PATH", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT")
+    keep = ["PATH", "LANG", "LC_ALL", "TMPDIR"]
+    if os.name == "nt":
+        # Windows needs more than POSIX to start a process at all, and its temp
+        # directory lives in TEMP/TMP rather than TMPDIR. Stripping these left
+        # the child unable to probe its own CPU.
+        keep += [
+            "SYSTEMROOT",
+            "WINDIR",
+            "TEMP",
+            "TMP",
+            "PATHEXT",
+            "COMSPEC",
+            "NUMBER_OF_PROCESSORS",
+            "PROCESSOR_ARCHITECTURE",
+        ]
     env = {name: os.environ[name] for name in keep if name in os.environ}
+
     # Bound the thread pool explicitly. RLIMIT_NPROC cannot do it (see Limits),
     # and an unbounded pool on a many-core box is its own denial of service.
     env["POLARS_MAX_THREADS"] = "4"
+
+    # The parent already imported polars on this machine, so the CPU check has
+    # passed. Re-running it here is not a second safety net: with a minimal
+    # environment the CPUID probe can fail, and polars reads an empty flag set as
+    # "every flag missing" rather than "could not detect", raising
+    # `unknown feature flag: 'sse3'` before the snippet runs.
+    env["POLARS_SKIP_CPU_CHECK"] = "1"
     return env
 
 

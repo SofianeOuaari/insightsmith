@@ -225,3 +225,24 @@ def test_a_non_ascii_traceback_comes_back_intact(frame: pl.DataFrame) -> None:
     outcome = run('raise ValueError("Fehler: Köln")', frame)
     assert not outcome.ok
     assert "Köln" in outcome.traceback
+
+
+def test_the_child_gets_what_it_needs_and_nothing_secret(monkeypatch) -> None:
+    """Scrubbing must not be so aggressive that the child cannot start.
+
+    Stripping the environment to five POSIX names left polars unable to probe
+    its own CPU on Windows: the probe returned an empty flag set, which polars
+    reads as "every flag missing" rather than "could not detect".
+    """
+    from insightsmith.execution.sandbox import _scrubbed_env
+
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "hunter2")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    monkeypatch.setenv("HTTPS_PROXY", "http://corp")
+    monkeypatch.setenv("PYTHONPATH", "/somewhere/else")
+
+    env = _scrubbed_env()
+    for secret in ("AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY", "HTTPS_PROXY", "PYTHONPATH"):
+        assert secret not in env, f"{secret} reached the sandbox"
+    assert env["POLARS_SKIP_CPU_CHECK"] == "1"
+    assert env["POLARS_MAX_THREADS"] == "4"

@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.4.2] - 2026-08-23
+
+### Bug fixes
+
+- **agents**: Retry once when every idea names a bac column
+
+### Continuous integration
+
+- Stop installing optional extras in the lint job
+
+### Features
+
+- **cli**: Let --ideas take a counter
+
 ## [0.4.1] - 2026-08-23
 
 ### Bug fixes

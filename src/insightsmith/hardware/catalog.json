@@ -22,9 +22,15 @@
       "context_length": 40960,
       "default_quant": "Q4_K_M",
       "license": "apache-2.0",
-      "roles": ["planner", "reasoner", "cheap"],
+      "roles": [
+        "planner",
+        "reasoner",
+        "cheap",
+        "coder"
+      ],
       "tier": "balanced",
-      "source": "verified"
+      "source": "verified",
+      "note": "Measured 3/3 on a Polars group-by where deepseek-coder:6.7b scored 0/3."
     },
     {
       "tag": "deepseek-r1:8b",
@@ -37,7 +43,10 @@
       "context_length": 131072,
       "default_quant": "Q4_K_M",
       "license": "mit",
-      "roles": ["reasoner", "planner"],
+      "roles": [
+        "reasoner",
+        "planner"
+      ],
       "tier": "balanced",
       "source": "verified"
     },
@@ -52,7 +61,10 @@
       "context_length": 32768,
       "default_quant": "Q4_K_M",
       "license": "apache-2.0",
-      "roles": ["planner", "cheap"],
+      "roles": [
+        "planner",
+        "cheap"
+      ],
       "tier": "balanced",
       "source": "verified"
     },
@@ -67,10 +79,10 @@
       "context_length": 16384,
       "default_quant": "Q4_0",
       "license": "deepseek",
-      "roles": ["coder"],
+      "roles": [],
       "tier": "balanced",
       "source": "verified",
-      "note": "No GQA: 32 KV heads means a KV cache four times larger than a GQA model of the same depth."
+      "note": "No GQA: 32 KV heads means a KV cache four times larger than a GQA model of the same depth. Not assigned the coder role: measured 0/3 on a Polars group-by against qwen3:8b's 3/3 \u2014 it predates Polars, writes pandas groupby(), and ignores corrective retries."
     },
     {
       "tag": "nomic-embed-text:latest",
@@ -83,7 +95,9 @@
       "context_length": 2048,
       "default_quant": "fp16",
       "license": "apache-2.0",
-      "roles": ["embed"],
+      "roles": [
+        "embed"
+      ],
       "tier": "small",
       "source": "verified"
     }

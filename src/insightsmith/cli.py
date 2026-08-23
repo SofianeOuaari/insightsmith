@@ -16,8 +16,9 @@ from rich.panel import Panel
 from rich.table import Table
 
 from insightsmith import __version__
+from insightsmith.agents.coder import Answer, CoderAgent
 from insightsmith.agents.ideation import MAX_IDEAS, Idea, IdeationAgent
-from insightsmith.config import load_config
+from insightsmith.config import DEFAULT_CONFIG_PATH, load_config
 from insightsmith.errors import InsightsmithError
 from insightsmith.hardware.accel import Accelerator, detect_accelerators, detect_installed_models
 from insightsmith.hardware.probe import SystemInfo, probe_system
@@ -144,6 +145,90 @@ def _ideas_table(proposals: list[Idea]) -> Table:
 
 
 @app.command()
+def ask(
+    path: Annotated[Path, typer.Argument(help="Data file to query.")],
+    question: Annotated[str, typer.Argument(help="What you want to know.")],
+    approve: Annotated[
+        bool,
+        typer.Option("--approve", help="Show the generated code and ask before running it."),
+    ] = False,
+    show_code: Annotated[
+        bool, typer.Option("--code/--no-code", help="Print the code that produced the answer.")
+    ] = True,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the answer as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Answer a question by writing and running code against the data."""
+    spec = None
+    try:
+        spec = sniff(path)
+        result, sample = profile_with_sample(spec)
+    except (InsightsmithError, OSError) as exc:
+        _fail(exc)
+    except PolarsError as exc:
+        hint = f" (read as {spec.format.value})" if spec is not None else ""
+        _fail(f"could not parse {path}{hint}: {_first_line(exc)}")
+
+    card = build_card(result, sample)
+    try:
+        answer = CoderAgent(router=Router()).answer(
+            card, sample, question, approve=approve, on_code=_confirm if approve else None
+        )
+    except InsightsmithError as exc:
+        _fail(exc)
+
+    if as_json:
+        console.print_json(
+            json.dumps(
+                {
+                    "question": answer.question,
+                    "code": answer.code,
+                    "explanation": answer.explanation,
+                    "kind": answer.kind,
+                    "value": answer.value,
+                    "rows": None if answer.frame is None else answer.frame.to_dicts(),
+                    "attempts": len(answer.attempts),
+                },
+                default=str,
+            )
+        )
+        return
+    _render_answer(answer, show_code=show_code)
+
+
+def _confirm(code: str) -> bool:
+    """The human-in-the-loop layer from §7, shown before anything runs."""
+    console.print(Panel(escape(code), title="about to run", expand=False))
+    return typer.confirm("Run this?", default=False)
+
+
+def _render_answer(answer: Answer, *, show_code: bool) -> None:
+    if show_code:
+        console.print(Panel(escape(answer.code), title="code", expand=False))
+    if answer.explanation:
+        console.print(answer.explanation)
+
+    if answer.frame is not None:
+        table = Table(header_style="bold")
+        for column in answer.frame.columns:
+            table.add_column(column)
+        for row in answer.frame.head(50).iter_rows():
+            table.add_row(*[str(cell) for cell in row])
+        console.print(table)
+        if answer.frame.height > 50:
+            console.print(f"[dim]showing 50 of {answer.frame.height} rows[/]")
+    elif answer.kind == "none":
+        console.print("[yellow]the snippet ran but assigned nothing to `result`[/]")
+    else:
+        console.print(f"[bold]{answer.value}[/]")
+
+    retries = len(answer.attempts) - 1
+    if retries > 0:
+        console.print(f"[dim]took {retries} retry(s) after a failure[/]")
+
+
+@app.command()
 def doctor(
     context: Annotated[
         int, typer.Option("--context", "-c", help="Context length to size the KV cache for.")
@@ -224,8 +309,15 @@ def models(
         )
         return
 
-    source = str(config.path) if config.path else "defaults (no config file)"
-    console.print(f"config: {source}")
+    if config.path is not None:
+        console.print(f"config: {config.path}")
+    else:
+        # Naming the path matters: nothing creates the file, so without this the
+        # only way to learn where it goes is to read the source.
+        console.print(
+            f"config: none found — using defaults. Create [bold]{DEFAULT_CONFIG_PATH}[/] "
+            "to change them."
+        )
     if config.budget.local_only:
         console.print("[green]local_only is on — remote providers are refused[/]")
     console.print(_models_table(rows))

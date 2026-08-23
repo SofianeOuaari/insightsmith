@@ -383,5 +383,26 @@ def test_catalog_entries_are_self_consistent() -> None:
         assert model.n_layers > 0
         assert model.head_dim > 0
         assert model.context_length > 0
-        assert model.roles, f"{model.tag} has no role and can never be recommended"
         assert model.source == "verified", f"{model.tag} is not marked verified"
+        # An entry with no roles is never recommended, so it must say why —
+        # otherwise a role gets dropped in a refactor and nobody notices.
+        assert model.roles or model.note, (
+            f"{model.tag} has no role and no note explaining the omission"
+        )
+
+
+def test_a_model_excluded_from_a_role_explains_itself() -> None:
+    """deepseek-coder:6.7b is catalogued for fit maths but not recommended.
+
+    It measured 0/3 on a Polars group-by where qwen3:8b scored 3/3, writing
+    pandas `groupby()` and ignoring corrective retries. Recommending a "coder"
+    model that cannot code is worse than recommending nothing.
+    """
+    catalog = load_catalog()
+    coder = next(m for m in catalog.models if m.tag == "deepseek-coder:6.7b")
+    assert coder.roles == []
+    assert "0/3" in coder.note
+
+
+def test_some_model_still_covers_the_coder_role() -> None:
+    assert load_catalog().for_role("coder"), "no model can be recommended for coding"

@@ -402,3 +402,106 @@ def test_no_ideas_flag_means_no_model_is_contacted(samples: dict[str, Path]) -> 
     result = runner.invoke(app, ["look", str(samples["csv"])])
     assert result.exit_code == 0
     assert "analysis ideas" not in result.stdout
+
+
+def _stub_coder(monkeypatch, code: str):
+    import httpx
+
+    from insightsmith.llm.ollama import OllamaProvider
+
+    body = json.dumps({"code": code, "explanation": "does the thing"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "show" in str(request.url):
+            return httpx.Response(
+                200,
+                json={"capabilities": ["completion"], "model_info": {"q.context_length": 8192}},
+            )
+        return httpx.Response(
+            200, json={"model": "m", "message": {"role": "assistant", "content": body}}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(
+        "insightsmith.llm.registry.OllamaProvider", lambda **_: OllamaProvider(client=client)
+    )
+    return client
+
+
+def _ask_fixture(tmp_path: Path, monkeypatch) -> Path:
+    config = tmp_path / "config.toml"
+    config.write_text('[roles]\ncoder = "ollama/test"\n', encoding="utf-8")
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(config))
+    data = tmp_path / "sales.csv"
+    data.write_text("region,revenue\nnorth,120\nsouth,80\neast,95\n", encoding="utf-8")
+    return data
+
+
+def test_ask_returns_a_number(tmp_path: Path, monkeypatch) -> None:
+    client = _stub_coder(monkeypatch, "result = float(df['revenue'].sum())")
+    data = _ask_fixture(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["ask", str(data), "total revenue?"])
+    client.close()
+    assert result.exit_code == 0
+    assert "295" in result.stdout
+    assert "code" in result.stdout
+
+
+def test_ask_json(tmp_path: Path, monkeypatch) -> None:
+    client = _stub_coder(monkeypatch, "result = float(df['revenue'].sum())")
+    data = _ask_fixture(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["ask", str(data), "total?", "--json"])
+    client.close()
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["value"] == 295.0
+    assert payload["attempts"] == 1
+    assert "df" in payload["code"]
+
+
+def test_ask_renders_a_table_for_a_frame(tmp_path: Path, monkeypatch) -> None:
+    client = _stub_coder(monkeypatch, "result = df.sort('revenue', descending=True).head(2)")
+    data = _ask_fixture(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["ask", str(data), "top two?"])
+    client.close()
+    assert result.exit_code == 0
+    assert "north" in result.stdout
+
+
+def test_ask_can_hide_the_code(tmp_path: Path, monkeypatch) -> None:
+    client = _stub_coder(monkeypatch, "result = df.height")
+    data = _ask_fixture(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["ask", str(data), "rows?", "--no-code"])
+    client.close()
+    assert result.exit_code == 0
+    assert "3" in result.stdout
+
+
+def test_ask_fails_cleanly_when_the_model_cannot_do_it(tmp_path: Path, monkeypatch) -> None:
+    client = _stub_coder(monkeypatch, "result = df['missing'].sum()")
+    data = _ask_fixture(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["ask", str(data), "impossible?"])
+    client.close()
+    assert result.exit_code == 1
+    assert "could not answer" in result.output
+    # The snippet's traceback is shown on purpose — it is the user's window into
+    # what the model got wrong. What must not appear is our own stack.
+    assert "snippet.py" in result.output
+    assert "insightsmith/cli.py" not in result.output
+    assert "insightsmith/agents" not in result.output
+
+
+def test_models_names_the_config_path_when_there_is_none(
+    tmp_path: Path, monkeypatch, stub_ollama
+) -> None:
+    """Nothing creates the file, so the CLI has to say where it goes."""
+    from insightsmith.config import DEFAULT_CONFIG_PATH
+
+    stub_ollama({"capabilities": ["completion"], "model_info": {"q.context_length": 8192}})
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(tmp_path / "absent.toml"))
+
+    result = runner.invoke(app, ["models"])
+    assert result.exit_code == 0
+    flat = " ".join(result.stdout.split())
+    assert "none found" in flat
+    assert str(DEFAULT_CONFIG_PATH.name) in flat

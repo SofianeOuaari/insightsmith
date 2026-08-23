@@ -16,7 +16,7 @@ from insightsmith.agents.base import Agent
 from insightsmith.errors import ProviderError
 from insightsmith.profiling.card import DatasetCard
 
-__all__ = ["Idea", "IdeationAgent", "validate_ideas"]
+__all__ = ["Idea", "IdeationAgent", "unknown_columns", "validate_ideas"]
 
 MAX_IDEAS: Final = 8
 _EFFORT = ("low", "medium", "high")
@@ -56,7 +56,8 @@ You are a careful data analyst proposing analyses for a dataset you can only see
 through its card. Rank ideas by what a decision-maker would find most useful.
 
 Rules:
-- Only reference columns that appear in the card. Never invent a column.
+- Only reference columns that appear in the card. Copy each name exactly,
+  character for character. Never invent or adjust a column name.
 - Prefer questions the data can actually answer, given the row count and the \
 quality notes.
 - Say what method you would use, concretely.
@@ -100,8 +101,13 @@ class IdeationAgent(Agent):
     def propose(self, card: DatasetCard, *, limit: int = MAX_IDEAS) -> list[Idea]:
         """Ask for ideas and return only those that survive validation.
 
+        A single mistyped column disqualifies an otherwise sound idea — models
+        really do write ``ums5atz`` for ``umsatz`` — so if nothing survives, ask
+        once more naming the offending columns. Small ``limit`` values make that
+        far likelier, since there are fewer ideas for a good one to hide among.
+
         Raises:
-            ProviderError: if nothing usable came back.
+            ProviderError: if nothing usable came back after the retry.
         """
         prompt = (
             f"Propose up to {limit} analyses for this dataset, best first. "
@@ -109,10 +115,23 @@ class IdeationAgent(Agent):
         )
         payload = self.ask(card, prompt, IDEA_SCHEMA)
         ideas = validate_ideas(payload, card, limit=limit)
+        if ideas:
+            return ideas
+
+        invented = unknown_columns(payload, card)
+        retry = (
+            f"{prompt}\n\nYour previous reply was rejected: "
+            f"it referenced {', '.join(repr(c) for c in invented) or 'no valid columns'}, "
+            f"which do not exist. The only columns are: "
+            f"{', '.join(repr(c) for c in sorted(card.column_names()))}. "
+            "Copy those names exactly."
+        )
+        ideas = validate_ideas(self.ask(card, retry, IDEA_SCHEMA), card, limit=limit)
         if not ideas:
             raise ProviderError(
-                "the model proposed no usable ideas — every suggestion referenced "
-                "columns that are not in the dataset"
+                "the model proposed no usable ideas — every suggestion referenced columns "
+                f"that are not in the dataset (it asked for: "
+                f"{', '.join(invented) or 'nothing recognisable'})"
             )
         return ideas
 
@@ -156,6 +175,24 @@ def validate_ideas(
         if len(out) >= limit:
             break
     return out
+
+
+def unknown_columns(payload: dict[str, Any] | list[Any], card: DatasetCard) -> list[str]:
+    """Column names the reply referenced that the card does not contain.
+
+    Fed back to the model so a correction is possible, and shown to the user so
+    a persistent failure is explicable rather than mysterious.
+    """
+    known = card.column_names()
+    seen: list[str] = []
+    for item in _unwrap(payload):
+        if not isinstance(item, dict):
+            continue
+        for column in _as_list(item.get("columns")):
+            name = str(column)
+            if name not in known and name not in seen:
+                seen.append(name)
+    return seen
 
 
 def _unwrap(payload: dict[str, Any] | list[Any]) -> list[Any]:

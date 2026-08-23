@@ -307,3 +307,98 @@ def test_extra_is_named_in_the_missing_dependency_message(monkeypatch, tmp_path:
     result = runner.invoke(app, ["look", str(path)])
     assert result.exit_code == 1
     assert "insightsmith[excel]" in result.output
+
+
+def _stub_ideas_provider(monkeypatch, count: int = 12):
+    """A model that always offers `count` valid ideas, so the cap is what limits."""
+    import httpx
+
+    from insightsmith.llm.ollama import OllamaProvider
+
+    ideas = [
+        {
+            "question": f"Question {i}?",
+            "rationale": "r",
+            "method": "m",
+            "columns": ["region"],
+            "expected_artifact": "table",
+            "effort": "low",
+        }
+        for i in range(count)
+    ]
+    body = json.dumps({"ideas": ideas})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "show" in str(request.url):
+            return httpx.Response(
+                200,
+                json={"capabilities": ["completion"], "model_info": {"q.context_length": 8192}},
+            )
+        return httpx.Response(
+            200, json={"model": "m", "message": {"role": "assistant", "content": body}}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(
+        "insightsmith.llm.registry.OllamaProvider", lambda **_: OllamaProvider(client=client)
+    )
+    return client
+
+
+def _ideas_fixture(tmp_path: Path, monkeypatch) -> Path:
+    config = tmp_path / "config.toml"
+    config.write_text('[roles]\nplanner = "ollama/test"\n', encoding="utf-8")
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(config))
+    data = tmp_path / "sales.csv"
+    data.write_text("region,revenue\nnorth,120\nsouth,80\neast,95\n", encoding="utf-8")
+    return data
+
+
+def test_max_ideas_caps_how_many_come_back(tmp_path: Path, monkeypatch) -> None:
+    client = _stub_ideas_provider(monkeypatch)
+    data = _ideas_fixture(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["look", str(data), "--ideas", "--max-ideas", "3", "--json"])
+    client.close()
+    assert result.exit_code == 0
+    assert len(json.loads(result.stdout)["ideas"]) == 3
+
+
+def test_max_ideas_has_a_short_form(tmp_path: Path, monkeypatch) -> None:
+    client = _stub_ideas_provider(monkeypatch)
+    data = _ideas_fixture(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["look", str(data), "-n", "2", "--json"])
+    client.close()
+    assert result.exit_code == 0
+    assert len(json.loads(result.stdout)["ideas"]) == 2
+
+
+def test_a_count_alone_implies_ideas(tmp_path: Path, monkeypatch) -> None:
+    """Otherwise --max-ideas would be accepted and silently ignored."""
+    client = _stub_ideas_provider(monkeypatch)
+    data = _ideas_fixture(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["look", str(data), "--max-ideas", "1", "--json"])
+    client.close()
+    assert result.exit_code == 0
+    assert len(json.loads(result.stdout)["ideas"]) == 1
+
+
+def test_the_default_is_eight(tmp_path: Path, monkeypatch) -> None:
+    client = _stub_ideas_provider(monkeypatch)
+    data = _ideas_fixture(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["look", str(data), "--ideas", "--json"])
+    client.close()
+    assert result.exit_code == 0
+    assert len(json.loads(result.stdout)["ideas"]) == 8
+
+
+def test_a_nonsensical_count_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    data = _ideas_fixture(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["look", str(data), "-n", "0"])
+    assert result.exit_code != 0
+
+
+def test_no_ideas_flag_means_no_model_is_contacted(samples: dict[str, Path]) -> None:
+    """Plain `look` must stay offline; the autouse guard fails any real request."""
+    result = runner.invoke(app, ["look", str(samples["csv"])])
+    assert result.exit_code == 0
+    assert "analysis ideas" not in result.stdout

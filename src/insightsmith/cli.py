@@ -16,7 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from insightsmith import __version__
-from insightsmith.agents.ideation import Idea, IdeationAgent
+from insightsmith.agents.ideation import MAX_IDEAS, Idea, IdeationAgent
 from insightsmith.config import load_config
 from insightsmith.errors import InsightsmithError
 from insightsmith.hardware.accel import Accelerator, detect_accelerators, detect_installed_models
@@ -63,6 +63,15 @@ def look(
     ideas: Annotated[
         bool, typer.Option("--ideas", help="Ask a model for ranked analysis ideas.")
     ] = False,
+    max_ideas: Annotated[
+        int,
+        typer.Option(
+            "--max-ideas",
+            "-n",
+            min=1,
+            help="How many ideas to ask for. Implies --ideas.",
+        ),
+    ] = MAX_IDEAS,
     show_card: Annotated[
         bool, typer.Option("--card", help="Print the dataset card a model would see.")
     ] = False,
@@ -82,11 +91,14 @@ def look(
             hint = f" (read as {spec.format.value}, {spec.confidence:.0%} confidence)"
         _fail(f"could not parse {path}{hint}: {_first_line(exc)}")
 
-    card = build_card(result, sample) if (ideas or show_card) else None
+    # Asking for a count is asking for ideas; requiring both flags would only
+    # let --max-ideas be silently ignored.
+    wants_ideas = ideas or max_ideas != MAX_IDEAS
+    card = build_card(result, sample) if (wants_ideas or show_card) else None
     proposals: list[Idea] = []
-    if ideas and card is not None:
+    if wants_ideas and card is not None:
         try:
-            proposals = IdeationAgent(router=Router()).propose(card)
+            proposals = IdeationAgent(router=Router()).propose(card, limit=max_ideas)
         except InsightsmithError as exc:
             _fail(exc)
 
@@ -95,7 +107,7 @@ def look(
         if card is not None:
             payload["card"] = card.to_dict()
             payload["card_hash"] = card.hash
-        if ideas:
+        if wants_ideas:
             payload["ideas"] = [idea.to_dict() for idea in proposals]
         console.print_json(json.dumps(payload, default=str))
         return
@@ -109,7 +121,7 @@ def look(
                 expand=False,
             )
         )
-    if ideas:
+    if wants_ideas:
         console.print(_ideas_table(proposals))
 
 

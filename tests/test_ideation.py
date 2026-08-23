@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 
-from insightsmith.agents.ideation import IdeationAgent, validate_ideas
+from insightsmith.agents.ideation import IdeationAgent, unknown_columns, validate_ideas
 from insightsmith.config import load_config
 from insightsmith.errors import ProviderError
 from insightsmith.io.sniff import sniff
@@ -200,3 +201,72 @@ def test_the_agent_sends_the_card_and_never_the_rows(tmp_path: Path, samples) ->
     assert payload, "nothing was sent"
     for leaked in ("Ada Lovelace", "ada@example.com", "Alan Turing"):
         assert leaked not in payload, f"{leaked} was sent to the model"
+
+
+def _two_reply_agent(tmp_path: Path, first: str, second: str):
+    """A model that answers `first`, then `second` on the follow-up."""
+    show = {"capabilities": ["completion"], "model_info": {"q.context_length": 8192}}
+    replies = [first, second]
+    prompts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "show" in str(request.url):
+            return httpx.Response(200, json=show)
+        prompts.append(request.content.decode())
+        text = replies.pop(0) if replies else second
+        return httpx.Response(
+            200, json={"model": "m", "message": {"role": "assistant", "content": text}}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    _OPEN.append(client)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[roles]\nplanner = "ollama/test"\n', encoding="utf-8")
+    router = Router(config=load_config(config_path, environ={}))
+    router._providers["ollama"] = OllamaProvider(client=client)
+    return IdeationAgent(router=router), prompts
+
+
+def _reply(columns: list[str]) -> str:
+    return json.dumps(
+        {
+            "ideas": [
+                {
+                    "question": "Q",
+                    "rationale": "r",
+                    "method": "m",
+                    "columns": columns,
+                    "expected_artifact": "table",
+                    "effort": "low",
+                }
+            ]
+        }
+    )
+
+
+def test_unknown_columns_lists_what_was_invented(card) -> None:
+    payload = {"ideas": [{"question": "Q", "columns": ["region", "ums5atz", "nope"]}]}
+    assert unknown_columns(payload, card) == ["ums5atz", "nope"]
+
+
+def test_a_mistyped_column_gets_one_corrective_retry(tmp_path: Path, card) -> None:
+    """Models really do write `ums5atz` for `umsatz`; one nudge usually fixes it."""
+    agent, prompts = _two_reply_agent(tmp_path, _reply(["reg1on"]), _reply(["region"]))
+    ideas = agent.propose(card, limit=3)
+    assert len(ideas) == 1
+    assert ideas[0].columns == ["region"]
+    assert len(prompts) == 2, "expected exactly one retry"
+    assert "reg1on" in prompts[1], "the retry must name the offending column"
+    assert "'region'" in prompts[1], "the retry must list the real columns"
+
+
+def test_a_good_first_answer_is_not_retried(tmp_path: Path, card) -> None:
+    agent, prompts = _two_reply_agent(tmp_path, _reply(["region"]), _reply(["region"]))
+    assert agent.propose(card, limit=3)
+    assert len(prompts) == 1, "a valid reply must not trigger a second call"
+
+
+def test_a_persistently_wrong_model_fails_with_the_names_it_used(tmp_path: Path, card) -> None:
+    agent, _ = _two_reply_agent(tmp_path, _reply(["bogus"]), _reply(["still_bogus"]))
+    with pytest.raises(ProviderError, match="bogus"):
+        agent.propose(card, limit=3)

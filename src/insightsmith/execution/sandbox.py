@@ -34,6 +34,9 @@ from insightsmith.execution.gate import Verdict, check
 
 __all__ = ["DEFAULT_LIMITS", "Limits", "SandboxResult", "run"]
 
+#: Whether a virtual-address-space cap can be applied without breaking imports.
+_MEMORY_CAP_SUPPORTED: Final = sys.platform.startswith("linux")
+
 _RUNNER: Final = """\
 import json, sys, pathlib
 import polars as pl
@@ -44,10 +47,11 @@ result = None
 fig = None
 
 try:
-    exec(compile((_dir / "snippet.py").read_text(), "snippet.py", "exec"), globals())
+    _src = (_dir / "snippet.py").read_text(encoding="utf-8")
+    exec(compile(_src, "snippet.py", "exec"), globals())
 except BaseException:
     import traceback
-    (_dir / "error.txt").write_text(traceback.format_exc())
+    (_dir / "error.txt").write_text(traceback.format_exc(), encoding="utf-8")
     raise SystemExit(1)
 
 out = {}
@@ -68,7 +72,7 @@ elif result is not None:
 else:
     out["kind"] = "none"
 
-(_dir / "result.json").write_text(json.dumps(out))
+(_dir / "result.json").write_text(json.dumps(out), encoding="utf-8")
 """
 
 
@@ -116,7 +120,10 @@ class SandboxResult:
     traceback: str = ""
     refused: list[str] = field(default_factory=list)
     timed_out: bool = False
+    #: True when any rlimit was applied (POSIX only).
     limits_enforced: bool = os.name == "posix"
+    #: True when the address-space cap was applied. Linux only — see Limits.
+    memory_capped: bool = _MEMORY_CAP_SUPPORTED
 
     @property
     def summary(self) -> str:
@@ -148,7 +155,12 @@ def run(
     if not verdict.allowed:
         return SandboxResult(ok=False, refused=list(verdict.reasons))
 
-    with tempfile.TemporaryDirectory(prefix="insightsmith-") as workspace:
+    # ignore_cleanup_errors: on Windows a killed child can still hold a handle to
+    # input.parquet when the directory is torn down, and a PermissionError there
+    # would mask the real result.
+    with tempfile.TemporaryDirectory(
+        prefix="insightsmith-", ignore_cleanup_errors=True
+    ) as workspace:
         work = Path(workspace)
         (work / "snippet.py").write_text(source, encoding="utf-8")
         (work / "runner.py").write_text(_RUNNER, encoding="utf-8")
@@ -168,7 +180,7 @@ def run(
                 stdout=completed.stdout,
                 stderr=completed.stderr,
                 traceback=(
-                    error.read_text()
+                    error.read_text(encoding="utf-8")
                     if error.is_file()
                     else (killed or completed.stderr or "the snippet exited non-zero")
                 ),
@@ -235,9 +247,15 @@ def _apply_limits(limits: Limits) -> Callable[[], None]:
         resource.setrlimit(
             resource.RLIMIT_CPU, (limits.cpu_seconds, limits.cpu_seconds + _CPU_GRACE)
         )
-        resource.setrlimit(
-            resource.RLIMIT_AS, (limits.address_space_bytes, limits.address_space_bytes)
-        )
+        # RLIMIT_AS caps *virtual* address space, and Rust allocators reserve it
+        # far in excess of what they touch. On Linux a polars import peaks around
+        # 400 MB and the cap is safe; on Darwin the reservation is large enough
+        # that a virtual cap kills the import before any snippet runs. Applied
+        # only where it has been verified to leave legitimate work alone.
+        if _MEMORY_CAP_SUPPORTED and limits.address_space_bytes:
+            resource.setrlimit(
+                resource.RLIMIT_AS, (limits.address_space_bytes, limits.address_space_bytes)
+            )
         resource.setrlimit(resource.RLIMIT_FSIZE, (limits.file_size_bytes, limits.file_size_bytes))
         if limits.processes is not None:
             resource.setrlimit(resource.RLIMIT_NPROC, (limits.processes, limits.processes))
@@ -255,7 +273,7 @@ def _collect(work: Path, completed: subprocess.CompletedProcess[str]) -> Sandbox
             traceback="the snippet produced no result",
         )
 
-    payload = json.loads(manifest.read_text())
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
     kind = str(payload.get("kind", "none"))
     frame = None
     if kind == "frame":

@@ -32,10 +32,20 @@ VM, a separate unprivileged user — if that is your situation.
 | **Separate process** | `sys.executable -I`, fresh temp directory, scrubbed environment, stdin closed | Same user, same filesystem permissions as you |
 | **Wall-clock timeout** | Kills after 60s by default | — |
 | **`RLIMIT_CPU`** | Terminates a looping snippet | **POSIX only** |
-| **`RLIMIT_AS`** | Caps address space at 4 GB | **POSIX only** |
+| **`RLIMIT_AS`** | Caps address space at 4 GB | **Linux only** — see below |
 | **`RLIMIT_FSIZE`** | Caps written file size at 256 MB | **POSIX only** |
 | **Data staging** | The snippet gets a Parquet copy in a scratch directory, never a path into your tree | It can still reach any file your user can, if it finds a way to open one |
 | **`--approve`** | Prints the code and waits for you | Off by default for `ismith ask` |
+
+### The memory cap is Linux-only
+
+`RLIMIT_AS` caps *virtual* address space, not memory actually touched, and Rust
+allocators reserve virtual space far in excess of what they use. On Linux a
+polars import peaks around 400 MB and a 4 GB cap leaves real work alone. On
+macOS the reservation is large enough that the same cap kills the import before
+any snippet runs, so it is not applied there. `SandboxResult.memory_capped`
+reports whether it was, and a snippet that allocates without bound on macOS will
+be stopped by the CPU limit or the timeout rather than by a memory ceiling.
 
 ### On Windows, the resource limits do not exist
 

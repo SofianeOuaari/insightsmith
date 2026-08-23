@@ -14,7 +14,7 @@ import polars as pl
 import pytest
 
 from insightsmith.execution.gate import ALLOWED_IMPORTS, check
-from insightsmith.execution.sandbox import Limits, run
+from insightsmith.execution.sandbox import _MEMORY_CAP_SUPPORTED, Limits, run
 
 
 @pytest.fixture
@@ -191,11 +191,37 @@ def test_limits_are_reported_as_enforced_on_posix(frame: pl.DataFrame) -> None:
     assert outcome.limits_enforced
 
 
+@pytest.mark.skipif(
+    not _MEMORY_CAP_SUPPORTED, reason="the address-space cap is applied on Linux only"
+)
 def test_a_huge_allocation_is_refused(frame: pl.DataFrame) -> None:
     """RLIMIT_AS turns a runaway allocation into an error, not a dead machine."""
-    if sys.platform == "win32":  # pragma: no cover - no rlimits there
-        pytest.skip("rlimits are POSIX-only")
     outcome = run(
         "result = bytearray(3 * 1024**3)", frame, limits=Limits(address_space_bytes=512 * 1024**2)
     )
     assert not outcome.ok
+
+
+def test_the_result_says_whether_memory_was_capped(frame: pl.DataFrame) -> None:
+    """Claiming a cap that was never applied would be worse than having none."""
+    outcome = run("result = 1", frame)
+    assert outcome.memory_capped is _MEMORY_CAP_SUPPORTED
+
+
+def test_non_ascii_survives_the_round_trip(frame: pl.DataFrame) -> None:
+    """Every file the sandbox writes or reads is explicitly UTF-8.
+
+    Without that the child falls back to the locale encoding, which on Windows
+    is cp1252 — a snippet or traceback containing an umlaut would break there
+    while passing on Linux.
+    """
+    german = pl.DataFrame({"stadt": ["Köln", "Süd"], "wert": [1.0, 2.0]})
+    outcome = run('result = float(df.filter(pl.col("stadt") == "Köln")["wert"].sum())', german)
+    assert outcome.ok
+    assert outcome.value == 1.0
+
+
+def test_a_non_ascii_traceback_comes_back_intact(frame: pl.DataFrame) -> None:
+    outcome = run('raise ValueError("Fehler: Köln")', frame)
+    assert not outcome.ok
+    assert "Köln" in outcome.traceback

@@ -70,6 +70,11 @@ OLLAMA_SHOW_NO_TOOLS: dict[str, Any] = {
     "capabilities": ["completion"],
     "model_info": {"llama.context_length": 8192},
 }
+# qwen3:8b really does report this; verified against a running Ollama.
+OLLAMA_SHOW_THINKING: dict[str, Any] = {
+    "capabilities": ["completion", "tools", "thinking"],
+    "model_info": {"qwen3.context_length": 40960},
+}
 OLLAMA_TAGS: dict[str, Any] = {"models": [{"name": "qwen3:8b"}, {"name": "mistral:latest"}]}
 
 
@@ -483,3 +488,87 @@ def test_recorded_bodies_are_valid_json() -> None:
     """Guards the fixtures themselves against typos."""
     for body in (OPENAI_REPLY, OPENAI_TOOL_REPLY, OLLAMA_SHOW_TOOLS, OLLAMA_TAGS):
         assert json.loads(json.dumps(body)) == body
+
+
+# --------------------------------------------------------------------------- #
+# reasoning models and timeouts
+# --------------------------------------------------------------------------- #
+
+
+def test_a_slow_model_is_not_reported_as_an_absent_server() -> None:
+    """A read timeout once said "is `ollama serve` running?" — it was running."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("too slow")
+
+    provider = OllamaProvider(client=_transport(handler), timeout=12.0)
+    with pytest.raises(ProviderError) as caught:
+        provider.list_models()
+    message = str(caught.value)
+    assert "no reply within 12s" in message or "sent no reply within 12s" in message
+    assert "ollama serve" not in message
+
+
+def test_a_genuinely_absent_server_still_says_so() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    provider = OllamaProvider(client=_transport(handler))
+    with pytest.raises(ProviderError, match="ollama serve"):
+        provider.list_models()
+
+
+def _capture_chat(show: dict[str, Any]) -> tuple[OllamaProvider, list[dict[str, Any]]]:
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "show" in str(request.url):
+            return httpx.Response(200, json=show)
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"model": "m", "message": {"role": "assistant", "content": "{}"}}
+        )
+
+    return OllamaProvider(client=_transport(handler)), seen
+
+
+def test_thinking_is_disabled_when_json_is_wanted() -> None:
+    """Chain-of-thought into a JSON slot is latency for no output.
+
+    qwen3:8b exceeded a 300s timeout thinking, and returned the same object in
+    0.8s with thinking off.
+    """
+    provider, seen = _capture_chat(OLLAMA_SHOW_THINKING)
+    provider.chat("qwen3:8b", [Message(role="user", content="go")], json_mode=True)
+    assert seen[0]["think"] is False
+    assert seen[0]["format"] == "json"
+
+
+def test_thinking_is_disabled_when_tools_are_used() -> None:
+    provider, seen = _capture_chat(OLLAMA_SHOW_THINKING)
+    provider.chat("qwen3:8b", [Message(role="user", content="go")], tools=[{"type": "function"}])
+    assert seen[0]["think"] is False
+
+
+def test_thinking_is_left_alone_for_free_form_replies() -> None:
+    """Only structured output pays for reasoning it cannot use."""
+    provider, seen = _capture_chat(OLLAMA_SHOW_THINKING)
+    provider.chat("qwen3:8b", [Message(role="user", content="explain")])
+    assert "think" not in seen[0]
+
+
+def test_a_model_without_reasoning_is_sent_no_think_flag() -> None:
+    provider, seen = _capture_chat(OLLAMA_SHOW_NO_TOOLS)
+    provider.chat("llama3.2:3b", [Message(role="user", content="go")], json_mode=True)
+    assert "think" not in seen[0]
+
+
+def test_the_caller_can_force_thinking_back_on() -> None:
+    provider, seen = _capture_chat(OLLAMA_SHOW_THINKING)
+    provider.chat("qwen3:8b", [Message(role="user", content="go")], json_mode=True, think=True)
+    assert seen[0]["think"] is True
+
+
+def test_thinks_reads_the_capability_list() -> None:
+    assert OllamaProvider(client=_always(OLLAMA_SHOW_THINKING)).thinks("qwen3:8b")
+    assert not OllamaProvider(client=_always(OLLAMA_SHOW_NO_TOOLS)).thinks("llama3.2:3b")

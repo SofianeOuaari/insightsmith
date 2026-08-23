@@ -20,7 +20,9 @@ from insightsmith.llm.base import Capabilities, Chunk, Completion, Message, Tool
 __all__ = ["DEFAULT_HOST", "OllamaProvider"]
 
 DEFAULT_HOST: Final = "http://localhost:11434"
-_TIMEOUT: Final = 300.0
+#: Generous by default: a cold 8B model partially offloaded to CPU is slow to
+#: first token, and a premature timeout looks like a hang to the caller.
+DEFAULT_TIMEOUT: Final = 300.0
 _DEFAULT_CONTEXT: Final = 4096
 
 
@@ -30,24 +32,42 @@ class OllamaProvider:
     name = "ollama"
     local = True
 
-    def __init__(self, host: str = DEFAULT_HOST, *, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        host: str = DEFAULT_HOST,
+        *,
+        client: httpx.Client | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> None:
         self.host = host.rstrip("/")
+        self.timeout = timeout
         self._client = client
         self._shown: dict[str, dict[str, Any]] = {}
 
     @property
     def client(self) -> httpx.Client:
         if self._client is None:
-            self._client = httpx.Client(timeout=_TIMEOUT)
+            self._client = httpx.Client(timeout=self.timeout)
         return self._client
 
     def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
         try:
             response = self.client.request(method, f"{self.host}{path}", json=payload)
-        except httpx.HTTPError as exc:
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             raise ProviderError(
                 f"ollama: {self.host} is not reachable ({exc}). Is `ollama serve` running?"
             ) from exc
+        except httpx.TimeoutException as exc:
+            # The server answered the connection but not in time. Saying "not
+            # reachable" here sends the user to check a service that is running.
+            raise ProviderError(
+                f"ollama: {self.host} accepted the connection but sent no reply within "
+                f"{self.timeout:g}s. The model is likely loading, partially offloaded to CPU, "
+                "or reasoning at length. Try a smaller model, raise the timeout, or see "
+                "`ismith doctor` for what fits this machine."
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"ollama: request to {path} failed: {exc}") from exc
         if response.status_code >= 400:
             raise ProviderError(f"ollama: HTTP {response.status_code}: {response.text[:200]}")
         return response.json()
@@ -107,6 +127,11 @@ class OllamaProvider:
             vision="vision" in listed,
         )
 
+    def thinks(self, model: str) -> bool:
+        """Whether the model emits a separate reasoning stream."""
+        listed = {str(c).lower() for c in (self.show(model).get("capabilities") or [])}
+        return "thinking" in listed
+
     def list_models(self) -> list[str]:
         body = self._request("GET", "/api/tags")
         return sorted(str(m.get("name", "")) for m in (body or {}).get("models", []))
@@ -124,10 +149,23 @@ class OllamaProvider:
             "messages": [m.as_wire() for m in messages],
             "stream": False,
         }
+        wants_json = bool(options.pop("json_mode", False))
         if tools:
             payload["tools"] = list(tools)
-        if options.pop("json_mode", False):
+        if wants_json:
             payload["format"] = "json"
+
+        # Reasoning models put their chain-of-thought in `thinking` and leave
+        # `content` empty. When the answer must be a JSON object that is pure
+        # latency for no output: qwen3:8b spent past a 300s timeout thinking,
+        # and returned the same object in 0.8s with thinking off. Callers can
+        # still force it either way with think=.
+        think = options.pop("think", None)
+        if think is None and (tools or wants_json) and self.thinks(model):
+            think = False
+        if think is not None:
+            payload["think"] = bool(think)
+
         for passthrough in ("keep_alive",):
             if passthrough in options:
                 payload[passthrough] = options.pop(passthrough)

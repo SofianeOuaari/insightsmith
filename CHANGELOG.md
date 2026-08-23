@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.5.0] - 2026-08-23
+
+### Bug fixes
+
+- **execution**: Making the sandbox work
+- **execution**: Stop scrubbing the child environment into uselessness polars probes the CPU via CPUID at import
+
+### Documentation
+
+- Add SECURITY.md and document the sandbox States plainly that this defense in depth against a model erring by accident
+
+### Features
+
+- **execution**: Add the AST gate and subprocess sandbox
+- **agents**: Add the coder agent with a retyr-on-traceback loop
+- **cli**: Add `ismith ask`, and name the config path, ask writes a snippet, runs it sandoxed, and prints the answer with the code tahat produced it
+
 ## [0.4.2] - 2026-08-23
 
 ### Bug fixes

@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/logo.png" alt="insightsmith" width="200">
+
 # insightsmith
 
 **Forging insight from raw data.**
@@ -122,8 +124,16 @@ obvious PII masked. Three things follow, and they are the reason for the design:
 Ideas come back ranked, each naming the columns it needs — and **any idea
 referencing a column the card doesn't contain is discarded before you see it**.
 That one check removes most hallucination for the price of a set-membership test.
-Because the quality notes are on the card too, a model will hedge appropriately:
-given a date column flagged as ambiguous, it proposes parsing it "with caution".
+
+![Eight ranked analysis ideas for a sales dataset, each naming the columns it needs](https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/ideas-example.png)
+
+Every column named above — `Market`, `Product Type`, `State`, `Marketing`,
+`Total Expenses` — exists in the file. Anything else was dropped before it
+reached the table.
+
+The quality notes travel on the card too, so a model hedges where the data
+warrants it: given a date column flagged as ambiguous, it proposes parsing it
+"with caution" rather than trusting it.
 
 ### Wiring up a model
 

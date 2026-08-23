@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.4.1] - 2026-08-23
+
+### Bug fixes
+
+- **llm**: Stop reasonings model timing out on structured output
+
+### Build and packaging
+
+- Bump to 0.4.1
+
 ## [0.4.0] - 2026-08-09
 
 ### Build and packaging
@@ -13,6 +23,7 @@ by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
 - **profiling**: Add the dataset card and best-effort PII masking.
 - **cli**: Add `ismith look --ideas` and --card
+- **agents**: Add the ideation agents
 
 ## [0.3.0] - 2026-08-03
 

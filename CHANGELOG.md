@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.5.1] - 2026-08-23
+
+### Documentation
+
+- Add the logo and an ideation screenshot to the README
+
 ## [0.5.0] - 2026-08-23
 
 ### Bug fixes

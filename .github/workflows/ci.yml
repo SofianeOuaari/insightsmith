@@ -24,7 +24,11 @@ jobs:
         with:
           enable-cache: true
 
-      - run: uv sync --all-extras
+      # Deliberately no --all-extras. src imports none of them, and installing
+      # the pandas extra pulls numpy, whose stubs use PEP 695 `type` statements
+      # that mypy refuses to parse while checking against python_version 3.10 —
+      # our minimum. The test job below still installs everything.
+      - run: uv sync
 
       - name: ruff check
         run: uv run ruff check --output-format=github .

@@ -14,12 +14,13 @@ An agentic data consultant that runs on your own machine.
 >
 > Shipped so far: **format detection, loading and profiling** (`ismith look`),
 > **hardware probing with model-fit recommendation** (`ismith doctor`), the
-> **provider layer** routing roles to local or cloud models (`ismith models`), and
-> the **dataset card plus ideation** behind `ismith look --ideas`.
+> **provider layer** routing roles to local or cloud models (`ismith models`),
+> the **dataset card plus ideation** (`ismith look --ideas`), and **sandboxed
+> code execution** answering real questions (`ismith ask`).
 >
-> Still to come across 0.5.0–0.8.0: sandboxed code execution, visualisation, the
-> statistical critic, and reports. Nothing sends your data anywhere unless you
-> configure a remote provider yourself.
+> Still to come across 0.6.0–0.8.0: visualisation, the statistical critic, and
+> reports. Nothing sends your data anywhere unless you configure a remote
+> provider yourself.
 
 ---
 
@@ -73,6 +74,31 @@ of weights**. A rule of thumb based on parameter count alone cannot tell you tha
 
 Models that don't fit outright get a partial-offload layer count rather than a
 shrug, and anything larger than your RAM is excluded with a reason.
+
+### Getting an actual answer
+
+```bash
+ismith ask data/sales.csv "total sales by product type?"
+```
+
+The model writes a Polars snippet, it runs, and you get the number — plus the
+code that produced it, so the result is checkable rather than taken on trust.
+When the snippet fails, the traceback goes back to the model and it tries again,
+up to three times, then reports the failure honestly instead of inventing an
+answer.
+
+**The code runs in a separate process behind six layers of defence** (design doc
+§7): an allowlist AST gate that refuses `eval`, `exec`, `open`, `getattr`,
+dunder attributes and every import outside the analysis stack; an isolated
+interpreter with a scrubbed environment; CPU, memory and file-size limits;
+a Parquet copy of the data in a scratch directory rather than a path into your
+tree; and `--approve` to see each snippet before it runs.
+
+**Read [SECURITY.md](SECURITY.md) before pointing this at anything sensitive.**
+It is defence in depth against a model erring by accident — the realistic
+failure — and explicitly *not* a security boundary against a deliberately
+malicious prompt. The resource limits are POSIX-only; on Windows the gate and
+the timeout are all there is.
 
 ### Asking a model what's worth analysing
 
@@ -224,9 +250,12 @@ Worth stating plainly, in advance:
   substitute, and the catalog only contains models whose layer and KV-head counts
   were read from a running Ollama — never guessed.
 
-And for the releases still to come: LLMs write wrong code confidently, the sandbox
-will be defense-in-depth rather than a security boundary, and a statistical critic
-reduces but does not remove statistical nonsense.
+- **LLMs write wrong code confidently.** `ismith ask` prints the code for exactly
+  that reason — check it. The retry loop fixes code that *crashes*; it cannot
+  tell that a snippet ran cleanly and answered the wrong question. The
+  statistical critic that catches some of that arrives in 0.7.0.
+- **The sandbox is defence in depth, not a security boundary.** See
+  [SECURITY.md](SECURITY.md). Resource limits are POSIX-only.
 
 ## License
 

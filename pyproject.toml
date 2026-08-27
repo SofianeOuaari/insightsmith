@@ -133,10 +133,13 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 module = "tests.*"
 disallow_untyped_defs = false
 
-# plotly ships no py.typed marker. It is reached only through the optional viz
-# extra and behind a narrow adapter, so Any at that seam is contained.
+# The viz extra is not installed in the lint job: matplotlib depends on numpy,
+# whose stubs use PEP 695 syntax that mypy refuses to parse at python_version
+# 3.10 (see ci.yml). Both are reached behind narrow adapters that already handle
+# their absence at runtime, so an unresolved import there is expected rather than
+# a defect. When the extra *is* installed, matplotlib's own py.typed still wins.
 [[tool.mypy.overrides]]
-module = ["plotly.*"]
+module = ["matplotlib.*", "plotly.*"]
 ignore_missing_imports = true
 
 # ----------------------------------------------------------------------------

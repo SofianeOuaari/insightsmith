@@ -18,8 +18,10 @@ from rich.table import Table
 from insightsmith import __version__
 from insightsmith.agents.coder import Answer, CoderAgent
 from insightsmith.agents.ideation import MAX_IDEAS, Idea, IdeationAgent
+from insightsmith.agents.viz import VizAgent
 from insightsmith.config import DEFAULT_CONFIG_PATH, load_config
 from insightsmith.errors import InsightsmithError
+from insightsmith.execution.artifacts import ArtifactStore
 from insightsmith.hardware.accel import Accelerator, detect_accelerators, detect_installed_models
 from insightsmith.hardware.probe import SystemInfo, probe_system
 from insightsmith.hardware.recommend import (
@@ -155,6 +157,13 @@ def ask(
     show_code: Annotated[
         bool, typer.Option("--code/--no-code", help="Print the code that produced the answer.")
     ] = True,
+    chart: Annotated[
+        bool, typer.Option("--chart", help="Draw the answer and save it as a figure.")
+    ] = False,
+    out: Annotated[Path, typer.Option("--out", help="Directory for saved figures.")] = Path(
+        "insightsmith-out"
+    ),
+    dark: Annotated[bool, typer.Option("--dark", help="Render on a dark surface.")] = False,
     as_json: Annotated[
         bool, typer.Option("--json", help="Emit the answer as JSON instead of tables.")
     ] = False,
@@ -178,11 +187,18 @@ def ask(
     except InsightsmithError as exc:
         _fail(exc)
 
+    saved: list[str] = []
+    if chart and answer.frame is not None:
+        saved = _draw(answer, card, out, dark=dark)
+    elif chart:
+        errors.print("[yellow]nothing to chart: the answer is a single value[/]")
+
     if as_json:
         console.print_json(
             json.dumps(
                 {
                     "question": answer.question,
+                    "artifacts": saved,
                     "code": answer.code,
                     "explanation": answer.explanation,
                     "kind": answer.kind,
@@ -195,6 +211,42 @@ def ask(
         )
         return
     _render_answer(answer, show_code=show_code)
+
+
+def _draw(answer: Answer, card: Any, out: Path, *, dark: bool) -> list[str]:
+    """Choose a chart, render both forms, and record where they came from."""
+    from insightsmith.viz.render import render_html, render_png
+
+    frame = answer.frame
+    if frame is None:  # pragma: no cover - guarded by the caller
+        return []
+    try:
+        spec = VizAgent(router=Router()).choose(frame, answer.question, card)
+    except (InsightsmithError, ValueError) as exc:
+        errors.print(f"[yellow]no chart drawn: {escape(str(exc))}[/]")
+        return []
+
+    mode = "dark" if dark else "light"
+    store = ArtifactStore(out)
+    meta = {
+        "title": spec.title or answer.question,
+        "question": answer.question,
+        "card_hash": card.hash if card is not None else "",
+        "code": answer.code,
+    }
+    try:
+        png = store.write_bytes(
+            f"{spec.title or answer.question}.png", render_png(spec, frame, mode=mode), **meta
+        )
+        html = store.write_text(
+            f"{spec.title or answer.question}.html", render_html(spec, frame, mode=mode), **meta
+        )
+    except (InsightsmithError, ValueError, OSError) as exc:
+        errors.print(f"[yellow]no chart drawn: {escape(str(exc))}[/]")
+        return []
+
+    console.print(f"[green]chart[/] {spec.form.value} · saved {png.path} and {html.path.name}")
+    return [str(png.path), str(html.path)]
 
 
 def _confirm(code: str) -> bool:

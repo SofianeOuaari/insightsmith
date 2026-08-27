@@ -17,12 +17,12 @@ An agentic data consultant that runs on your own machine.
 > Shipped so far: **format detection, loading and profiling** (`ismith look`),
 > **hardware probing with model-fit recommendation** (`ismith doctor`), the
 > **provider layer** routing roles to local or cloud models (`ismith models`),
-> the **dataset card plus ideation** (`ismith look --ideas`), and **sandboxed
-> code execution** answering real questions (`ismith ask`).
+> the **dataset card plus ideation** (`ismith look --ideas`), **sandboxed code
+> execution** answering real questions (`ismith ask`), and **charts** with a
+> validated palette (`ismith ask --chart`).
 >
-> Still to come across 0.6.0–0.8.0: visualisation, the statistical critic, and
-> reports. Nothing sends your data anywhere unless you configure a remote
-> provider yourself.
+> Still to come across 0.7.0–0.8.0: the statistical critic and reports. Nothing
+> sends your data anywhere unless you configure a remote provider yourself.
 
 ---
 
@@ -95,6 +95,32 @@ dunder attributes and every import outside the analysis stack; an isolated
 interpreter with a scrubbed environment; CPU, memory and file-size limits;
 a Parquet copy of the data in a scratch directory rather than a path into your
 tree; and `--approve` to see each snippet before it runs.
+
+Add `--chart` and the answer is drawn as well as printed:
+
+```bash
+ismith ask data/sales.csv "total sales by product type?" --chart
+```
+
+![A ranked horizontal bar chart of total sales by product type](https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/chart-example.png)
+
+**The model picks the chart, it does not draw it.** It returns a form and which
+column fills which role; the renderer draws that spec. So charts are consistent,
+reproducible for a given spec, and no plotting code written by a model ever runs.
+A spec naming a column the result doesn't have is discarded, exactly as an idea
+would be.
+
+The palette was validated with a colour-blindness and contrast checker rather
+than chosen by eye, and two of its measurements are enforced in code: slots are
+assigned in a fixed order and a ninth series raises instead of inventing a hue,
+and scatter caps at three series because all-pairs forms fail the separation
+floor at four. Bars are ranked, long tails fold into "other", and one series
+gets one hue — colouring every bar differently implies a distinction the data
+does not contain.
+
+Each run saves a PNG and a self-contained interactive HTML next to a manifest
+recording the question, the code and the card hash, so a figure found later can
+be traced back to the data behind it.
 
 **Read [SECURITY.md](SECURITY.md) before pointing this at anything sensitive.**
 It is defence in depth against a model erring by accident — the realistic
@@ -216,6 +242,7 @@ that will handle them.
 ```bash
 pip install insightsmith            # csv, tsv, parquet, arrow, json, jsonl
 pip install insightsmith[excel]     # + xlsx / xls
+pip install insightsmith[viz]       # + charts (matplotlib, plotly)
 pip install insightsmith[pandas]    # + a .to_pandas() escape hatch
 ```
 

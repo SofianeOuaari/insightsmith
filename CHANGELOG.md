@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.6.0] - 2026-08-27
+
+### Continuous integration
+
+- Let mypy resvole without the viz extra installed
+
+### Features
+
+- **viz**: Add the chart theme and render
+- **execution**: Add the artifact store Every figure records the question, the code and the card has that produced it
+- **agents**: Add the viz agent. It picks a form and the column roles: it never writes plotting code, so a chart cannot be malformed by a bad snippet
+- **cli**: Add --chart to ismith ask, and bump to 0.6.0
+
 ## [0.5.1] - 2026-08-23
 
 ### Documentation

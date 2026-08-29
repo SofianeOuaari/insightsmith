@@ -505,3 +505,9 @@ def test_models_names_the_config_path_when_there_is_none(
     flat = " ".join(result.stdout.split())
     assert "none found" in flat
     assert str(DEFAULT_CONFIG_PATH.name) in flat
+
+
+def test_ask_can_be_told_to_skip_the_polars_reference() -> None:
+    result = runner.invoke(app, ["ask", "--help"])
+    assert result.exit_code == 0
+    assert "--no-guide" in result.output

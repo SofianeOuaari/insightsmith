@@ -20,6 +20,7 @@ from insightsmith.agents.base import Agent
 from insightsmith.errors import ProviderError
 from insightsmith.execution.gate import check
 from insightsmith.execution.sandbox import DEFAULT_LIMITS, Limits, SandboxResult, run
+from insightsmith.knowledge import CODER_EXCLUDES, DEFAULT_BUDGET, reference
 from insightsmith.profiling.card import DatasetCard
 
 __all__ = ["MAX_ATTEMPTS", "Answer", "Attempt", "CoderAgent", "extract_code"]
@@ -54,6 +55,16 @@ spelled exactly — including spaces and capitals.
 - Keep it to a few lines. No printing, no plotting.
 - Reply with a single JSON object: {"code": "...", "explanation": "..."}.\
 """
+
+#: Framing for the retrieved excerpts. The guide is written for an analyst with a
+#: file in front of them; the coder has neither a file nor permission to open one,
+#: so the excerpts are introduced as API reference rather than as instructions.
+_REFERENCE = """\
+Polars reference — excerpts from the bundled guide, closest match first. Use them \
+for API names and syntax only: `df` is already in memory, so ignore any file \
+reading, plotting or printing they happen to show.
+
+{sections}"""
 
 
 @dataclass(slots=True)
@@ -91,9 +102,25 @@ class CoderAgent(Agent):
 
     role: str = "coder"
     limits: Limits = DEFAULT_LIMITS
+    #: Retrieve Polars reference for each attempt. A small local model's memory of
+    #: the Polars API is the weakest link in the chain, and a wrong method name is
+    #: far cheaper to prevent than to discover in a traceback.
+    guide: bool = True
+    guide_budget: int = DEFAULT_BUDGET
 
     def system_prompt(self) -> str:
         return _SYSTEM
+
+    def reference_for(self, question: str, *, failure: str = "") -> str:
+        """Guide excerpts for a question, or nothing when they are switched off.
+
+        ``failure`` is the traceback from the previous attempt, and outweighs the
+        question: it names the mistake, where the question only names the goal.
+        """
+        if not self.guide or self.guide_budget <= 0:
+            return ""
+        found = reference(question, focus=failure, budget=self.guide_budget, exclude=CODER_EXCLUDES)
+        return f"{_REFERENCE.format(sections=found)}\n\n" if found else ""
 
     def answer(
         self,
@@ -114,17 +141,14 @@ class CoderAgent(Agent):
             ProviderError: if no attempt produced a usable answer.
         """
         history: list[Attempt] = []
-        prompt = (
-            f"Question: {question}\n\n"
-            "Write a Polars snippet that answers it, assigning to `result`."
-        )
+        prompt = self.reference_for(question) + _ask_prompt(question)
 
         for _ in range(max(1, attempts)):
             payload = self.ask(card, prompt, CODE_SCHEMA)
             code = extract_code(payload)
             explanation = str(payload.get("explanation") or "").strip()
             if not code:
-                prompt = _retry_prompt(question, "", "the reply contained no code")
+                prompt = self._retry(question, "", "the reply contained no code")
                 history.append(Attempt(code="", ok=False, error="no code in the reply"))
                 continue
 
@@ -134,11 +158,11 @@ class CoderAgent(Agent):
             verdict = check(code)
             if not verdict.allowed:
                 history.append(Attempt(code=code, ok=False, refused=list(verdict.reasons)))
-                prompt = _retry_prompt(question, code, "; ".join(verdict.reasons))
+                prompt = self._retry(question, code, "; ".join(verdict.reasons))
                 continue
 
             outcome = run(code, frame, limits=self.limits, gate=verdict)
-            if outcome.ok:
+            if outcome.ok and outcome.kind != "none":
                 history.append(Attempt(code=code, ok=True))
                 return Answer(
                     question=question,
@@ -152,7 +176,7 @@ class CoderAgent(Agent):
 
             error = _failure_text(outcome)
             history.append(Attempt(code=code, ok=False, error=error))
-            prompt = _retry_prompt(question, code, error)
+            prompt = self._retry(question, code, error)
 
         raise ProviderError(
             f"could not answer after {len(history)} attempt(s). "
@@ -160,6 +184,20 @@ class CoderAgent(Agent):
             if history
             else "no attempt was made"
         )
+
+    def _retry(self, question: str, code: str, error: str) -> str:
+        """Re-retrieve against the failure as well as the question.
+
+        A traceback names the thing the model got wrong — ``no attribute
+        'groupby'`` — which is a far sharper query than the question was.
+        """
+        return self.reference_for(question, failure=_exception_lines(error)) + _retry_prompt(
+            question, code, error
+        )
+
+
+def _ask_prompt(question: str) -> str:
+    return f"Question: {question}\n\nWrite a Polars snippet that answers it, assigning to `result`."
 
 
 def extract_code(payload: dict[str, Any]) -> str:
@@ -174,7 +212,26 @@ def extract_code(payload: dict[str, Any]) -> str:
 def _failure_text(outcome: SandboxResult) -> str:
     if outcome.timed_out:
         return "the snippet exceeded the time limit — it is probably looping"
+    if outcome.ok:
+        # The process ran cleanly and computed nothing the caller can use. Small
+        # models reach for this by wrapping the work in a function and assigning
+        # `result` inside it, where the runner cannot see it.
+        return (
+            "the snippet ran but never assigned `result` at the top level. "
+            "Assign it directly, not inside a function"
+        )
     return (outcome.traceback or outcome.stderr or "unknown failure").strip()[-1500:]
+
+
+def _exception_lines(error: str) -> str:
+    """The part of a traceback that names the mistake, for retrieval.
+
+    Frames are paths and line numbers — noise against a Polars guide, and enough
+    of it to drown the one line that matters. The model still sees the whole
+    traceback; only the query is narrowed.
+    """
+    lines = [line for line in error.splitlines() if line.strip() and not line.startswith(" ")]
+    return "\n".join(line for line in lines[-3:] if not line.startswith("Traceback")) or error
 
 
 def _retry_prompt(question: str, code: str, error: str) -> str:

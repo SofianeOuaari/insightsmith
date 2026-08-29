@@ -89,6 +89,17 @@ When the snippet fails, the traceback goes back to the model and it tries again,
 up to three times, then reports the failure honestly instead of inventing an
 answer.
 
+**The model does not have to remember the Polars API.** Every model has read far
+more pandas than Polars, so left alone it reaches for `groupby` and
+`sort_values` and spends a retry discovering they do not exist. A Polars
+reference ships inside the package, and each question pulls the two or three
+sections that bear on it — `group_by` for an aggregation, `.over()` for a
+per-group total, the pitfalls list for a pandas habit. On a retry the traceback
+becomes the query and outweighs the question: `no attribute 'groupby'` names the
+mistake, where the question only named the goal. The retrieval is BM25 over the
+guide's sixty-odd sections in pure stdlib — no embedding model, no second round
+trip, no index to rebuild. `--no-guide` turns it off.
+
 **The code runs in a separate process behind six layers of defence** (design doc
 §7): an allowlist AST gate that refuses `eval`, `exec`, `open`, `getattr`,
 dunder attributes and every import outside the analysis stack; an isolated

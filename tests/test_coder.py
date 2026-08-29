@@ -177,3 +177,64 @@ def test_the_sandbox_sees_the_real_data_even_though_the_model_does_not(
     agent, _ = _agent(tmp_path, _code("result = df['region'].to_list()"))
     answer = agent.answer(card, frame, "regions?")
     assert answer.value == ["north", "south", "east", "west"]
+
+
+def test_the_prompt_carries_polars_reference_for_the_question(tmp_path: Path, data) -> None:
+    """The guide is the cheap half of §7: prevent the wrong API, don't retry it."""
+    card, frame = data
+    agent, prompts = _agent(tmp_path, _code("result = float(df['revenue'].sum())"))
+    agent.answer(card, frame, "what is the total revenue by region?")
+
+    assert "Polars reference" in prompts[0]
+    assert "8.1 Basic group_by / agg" in prompts[0]
+    assert "`df` is already in memory" in prompts[0]
+
+
+def test_the_reference_can_be_switched_off(tmp_path: Path, data) -> None:
+    card, frame = data
+    agent, prompts = _agent(tmp_path, _code("result = float(df['revenue'].sum())"))
+    agent.guide = False
+    agent.answer(card, frame, "what is the total revenue by region?")
+
+    assert "Polars reference" not in prompts[0]
+    assert "Question: what is the total revenue by region?" in prompts[0]
+
+
+def test_the_retry_retrieves_against_the_failure_too(tmp_path: Path, data) -> None:
+    """A traceback names the mistake more sharply than the question ever did."""
+    card, frame = data
+    agent, prompts = _agent(
+        tmp_path,
+        _code("result = df.groupby('region').revenue.sum()"),
+        _code("result = df.group_by('region').agg(pl.col('revenue').sum())"),
+    )
+    answer = agent.answer(card, frame, "revenue per region?")
+
+    assert answer.frame is not None
+    assert "17 Common Pitfalls and Anti-Patterns" in prompts[1], "the failure was not scored"
+    assert "17 Common Pitfalls and Anti-Patterns" not in prompts[0]
+
+
+def test_the_reference_never_points_the_coder_at_a_file(tmp_path: Path, data) -> None:
+    """Reading, charting and installing are excluded: the coder may do none of them."""
+    card, frame = data
+    agent, prompts = _agent(tmp_path, _code("result = df.height"))
+    agent.answer(card, frame, "read the csv and plot revenue over time")
+
+    for banned in ("## 3.2 CSV specifics", "## 15.2 Matplotlib", "## 2 Installation"):
+        assert banned not in prompts[0], banned
+
+
+def test_a_snippet_that_assigns_nothing_is_a_failure_not_an_answer(tmp_path: Path, data) -> None:
+    """`result` inside a function is invisible to the runner — and a None answer."""
+    card, frame = data
+    agent, prompts = _agent(
+        tmp_path,
+        _code("def total():\n    result = df['revenue'].sum()\n    return result"),
+        _code("result = float(df['revenue'].sum())"),
+    )
+    answer = agent.answer(card, frame, "total revenue?")
+
+    assert answer.value == 355.0
+    assert "never assigned `result` at the top level" in prompts[1]
+    assert not answer.attempts[0].ok

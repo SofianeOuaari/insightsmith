@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "insightsmith"
-version = "0.6.0"
+version = "0.6.1"
 description = "Agentic data consultant that runs on your own hardware"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -77,7 +77,7 @@ dev = [
 packages = ["src/insightsmith"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "README.md", "CHANGELOG.md", "SECURITY.md", "LICENSE"]
+include = ["src", "tests", "scripts", "README.md", "CHANGELOG.md", "SECURITY.md", "LICENSE"]
 
 # ----------------------------------------------------------------------------
 # ruff

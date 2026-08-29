@@ -157,6 +157,13 @@ def ask(
     show_code: Annotated[
         bool, typer.Option("--code/--no-code", help="Print the code that produced the answer.")
     ] = True,
+    guide: Annotated[
+        bool,
+        typer.Option(
+            "--guide/--no-guide",
+            help="Give the coder Polars reference retrieved from the bundled guide.",
+        ),
+    ] = True,
     chart: Annotated[
         bool, typer.Option("--chart", help="Draw the answer and save it as a figure.")
     ] = False,
@@ -181,7 +188,7 @@ def ask(
 
     card = build_card(result, sample)
     try:
-        answer = CoderAgent(router=Router()).answer(
+        answer = CoderAgent(router=Router(), guide=guide).answer(
             card, sample, question, approve=approve, on_code=_confirm if approve else None
         )
     except InsightsmithError as exc:
@@ -270,8 +277,6 @@ def _render_answer(answer: Answer, *, show_code: bool) -> None:
         console.print(table)
         if answer.frame.height > 50:
             console.print(f"[dim]showing 50 of {answer.frame.height} rows[/]")
-    elif answer.kind == "none":
-        console.print("[yellow]the snippet ran but assigned nothing to `result`[/]")
     else:
         console.print(f"[bold]{answer.value}[/]")
 

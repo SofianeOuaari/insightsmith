@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from insightsmith import __version__
@@ -508,6 +509,12 @@ def test_models_names_the_config_path_when_there_is_none(
 
 
 def test_ask_can_be_told_to_skip_the_polars_reference() -> None:
-    result = runner.invoke(app, ["ask", "--help"])
-    assert result.exit_code == 0
-    assert "--no-guide" in result.output
+    """Read off the declared parameters, not the rendered help.
+
+    rich wraps the help table to the terminal it finds, so a `--guide/--no-guide`
+    pair splits across lines at some widths and not others — which makes a
+    substring check on the output a test of the CI runner's width.
+    """
+    ask = get_command(app).commands["ask"]  # type: ignore[attr-defined]
+    flags = {name for param in ask.params for name in (*param.opts, *param.secondary_opts)}
+    assert {"--guide", "--no-guide"} <= flags

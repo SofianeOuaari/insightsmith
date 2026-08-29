@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.6.1] - 2026-08-29
+
+### Bug fixes
+
+- **llm**: Size num_ctx to the prompt so ollama stops truncating it
+
+### Features
+
+- **knowledge**: Give the coder a Polars reference to retrieve from
+
+### Testing
+
+- **cli**: Assert the guide flag exists, not how ric renders it
+
 ## [0.6.0] - 2026-08-27
 
 ### Continuous integration
@@ -15,6 +29,10 @@ by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 - **execution**: Add the artifact store Every figure records the question, the code and the card has that produced it
 - **agents**: Add the viz agent. It picks a form and the column roles: it never writes plotting code, so a chart cannot be malformed by a bad snippet
 - **cli**: Add --chart to ismith ask, and bump to 0.6.0
+
+### Chrore
+
+- **release**: V0.6.0
 
 ## [0.5.1] - 2026-08-23
 

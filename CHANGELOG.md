@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.6.2] - 2026-08-29
+
+### Bug fixes
+
+- **viz,coder**: Say what actually went wrong
+
 ## [0.6.1] - 2026-08-29
 
 ### Bug fixes

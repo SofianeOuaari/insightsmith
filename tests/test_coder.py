@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from insightsmith.agents.coder import CoderAgent, extract_code
+from insightsmith.agents.coder import Attempt, CoderAgent, _summarise, _tail, extract_code
 from insightsmith.config import load_config
 from insightsmith.errors import ProviderError
 from insightsmith.execution.sandbox import Limits
@@ -238,3 +238,55 @@ def test_a_snippet_that_assigns_nothing_is_a_failure_not_an_answer(tmp_path: Pat
     assert answer.value == 355.0
     assert "never assigned `result` at the top level" in prompts[1]
     assert not answer.attempts[0].ok
+
+
+def test_the_final_failure_is_one_readable_line_not_a_traceback(tmp_path: Path, data) -> None:
+    """A polars stack buries the one line that says what went wrong under twenty."""
+    card, frame = data
+    agent, _ = _agent(tmp_path, _code("result = pl.DataFrame({'a': [{'b': object()}]})"))
+
+    with pytest.raises(ProviderError) as caught:
+        agent.answer(card, frame, "anything?", attempts=1)
+
+    message = str(caught.value)
+    assert "\n" not in message
+    assert "Traceback (most recent call last)" not in message
+    assert "site-packages" not in message
+    assert "Error" in message, message
+    assert "snippet.py line" in message, "the reader still needs to know where"
+
+
+def test_a_refusal_reports_the_reason_rather_than_a_traceback(tmp_path: Path, data) -> None:
+    card, frame = data
+    agent, _ = _agent(tmp_path, _code("import os\nresult = os.getcwd()"))
+
+    with pytest.raises(ProviderError, match="not allowed"):
+        agent.answer(card, frame, "anything?", attempts=1)
+
+
+def test_the_full_traceback_is_still_kept_for_inspection(tmp_path: Path, data) -> None:
+    """One line at the terminal; the whole thing on the attempt."""
+    card, frame = data
+    agent, _ = _agent(tmp_path, _code("result = df['nope'].sum()"), _code("result = df.height"))
+    answer = agent.answer(card, frame, "rows?")
+
+    assert answer.value == 4
+    assert "Traceback (most recent call last)" in answer.attempts[0].error
+
+
+def test_a_long_traceback_is_cut_on_a_line_boundary() -> None:
+    """Cutting mid-line leaves half a frame at column zero, reading as the error."""
+    frames = "\n".join(
+        f'  File "/very/long/path/to/site-packages/polars/module_{i}.py", line {i}, in f'
+        for i in range(60)
+    )
+    error = f"Traceback (most recent call last):\n{frames}\nValueError: the real problem"
+
+    tail = _tail(error, 1500)
+    assert len(tail) <= 1500
+    assert all(line.startswith((" ", "V")) for line in tail.splitlines()), tail
+    assert _summarise(Attempt(code="x", ok=False, error=tail)) == "ValueError: the real problem"
+
+
+def test_a_single_line_longer_than_the_budget_still_comes_back() -> None:
+    assert _tail("x" * 4000, 100) == "x" * 100

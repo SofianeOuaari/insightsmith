@@ -13,7 +13,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from insightsmith.agents.viz import default_spec, validate_spec
+from insightsmith.agents.viz import _undrawable, default_spec, validate_spec
 from insightsmith.execution.artifacts import ArtifactStore, slugify
 from insightsmith.viz.render import MAX_CATEGORIES, ChartSpec, Form, render_html, render_png
 from insightsmith.viz.theme import MAX_SERIES, SCATTER_MAX_SERIES, theme_for
@@ -170,6 +170,26 @@ def test_long_labels_get_horizontal_bars() -> None:
 
 def test_a_result_with_nothing_numeric_gets_no_chart() -> None:
     assert default_spec(pl.DataFrame({"a": ["x"], "b": ["y"]})) is None
+
+
+@pytest.mark.parametrize(
+    ("frame", "expected"),
+    [
+        (pl.DataFrame({"a": ["x"], "b": ["y"]}), "no numeric column"),
+        (pl.DataFrame({"corr": [0.117]}), "single column"),
+        (pl.DataFrame({"a": []}), "empty"),
+    ],
+)
+def test_an_undrawable_result_says_which_way_it_is_undrawable(
+    frame: pl.DataFrame, expected: str
+) -> None:
+    """A lone correlation is undrawable for want of an axis, not for want of a number."""
+    assert expected in _undrawable(frame)
+
+
+def test_a_single_numeric_column_is_not_blamed_on_being_non_numeric() -> None:
+    """The bug this replaced: one Float64 column reported as having none."""
+    assert "no numeric column" not in _undrawable(pl.DataFrame({"corr": [0.117]}))
 
 
 @pytest.mark.parametrize(

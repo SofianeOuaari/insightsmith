@@ -27,7 +27,12 @@ __all__ = ["MAX_ATTEMPTS", "Answer", "Attempt", "CoderAgent", "extract_code"]
 
 #: How many times the coder may be handed its own traceback (§7).
 MAX_ATTEMPTS: Final = 3
+#: How much of a failure fits on a terminal line before it stops being readable.
+_SUMMARY_CHARS: Final = 300
+#: How much traceback goes back to the model on a retry.
+_ERROR_CHARS: Final = 1500
 _FENCE = re.compile(r"```(?:python)?\s*(.*?)```", re.S)
+_SNIPPET_FRAME = re.compile(r'File "snippet\.py", line (\d+)')
 
 CODE_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
@@ -178,11 +183,11 @@ class CoderAgent(Agent):
             history.append(Attempt(code=code, ok=False, error=error))
             prompt = self._retry(question, code, error)
 
+        if not history:
+            raise ProviderError("no attempt was made")
         raise ProviderError(
             f"could not answer after {len(history)} attempt(s). "
-            f"Last failure: {history[-1].error or '; '.join(history[-1].refused)}"
-            if history
-            else "no attempt was made"
+            f"Last failure: {_summarise(history[-1])}"
         )
 
     def _retry(self, question: str, code: str, error: str) -> str:
@@ -220,7 +225,46 @@ def _failure_text(outcome: SandboxResult) -> str:
             "the snippet ran but never assigned `result` at the top level. "
             "Assign it directly, not inside a function"
         )
-    return (outcome.traceback or outcome.stderr or "unknown failure").strip()[-1500:]
+    return _tail((outcome.traceback or outcome.stderr or "unknown failure").strip(), _ERROR_CHARS)
+
+
+def _tail(text: str, limit: int) -> str:
+    """Keep the end of a traceback, cutting on a line boundary.
+
+    A cut mid-line leaves the remainder of an indented frame sitting at column
+    zero, where everything downstream reads it as the exception rather than as
+    the stack — which is how ``/insightsmith-6h_nejwd/runner.py", line 11`` ends
+    up presented to a reader as the thing that went wrong.
+    """
+    if len(text) <= limit:
+        return text
+    kept: list[str] = []
+    used = 0
+    for line in reversed(text.splitlines()):
+        used += len(line) + 1
+        if used > limit:
+            break
+        kept.append(line)
+    return "\n".join(reversed(kept)) if kept else text[-limit:]
+
+
+def _summarise(attempt: Attempt) -> str:
+    """One line for a human, from an attempt that keeps the whole traceback.
+
+    ``Attempt.error`` holds the full traceback so a failure stays inspectable,
+    but printing a polars-internal stack at a terminal buries the one line that
+    says what went wrong under twenty that do not.
+    """
+    if attempt.refused:
+        return "; ".join(attempt.refused)
+    summary = " ".join(_exception_lines(attempt.error).split())
+    if not summary:
+        return "unknown failure"
+    # The snippet's own frame stays: it is the one location in the stack the
+    # reader can act on. Every polars frame above it is ours to hide.
+    frames = _SNIPPET_FRAME.findall(attempt.error)
+    where = f"snippet.py line {frames[-1]}: " if frames else ""
+    return f"{where}{summary}"[:_SUMMARY_CHARS]
 
 
 def _exception_lines(error: str) -> str:

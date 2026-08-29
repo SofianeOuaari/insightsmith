@@ -70,8 +70,7 @@ class VizAgent(Agent):
         """
         fallback = default_spec(frame, question)
         if fallback is None:
-            msg = "the result has no numeric column to plot"
-            raise ValueError(msg)
+            raise ValueError(_undrawable(frame))
 
         schema = {name: str(dtype) for name, dtype in frame.schema.items()}
         prompt = (
@@ -85,6 +84,24 @@ class VizAgent(Agent):
         except Exception:
             return fallback
         return validate_spec(payload, frame) or fallback
+
+
+def _undrawable(frame: pl.DataFrame) -> str:
+    """Why this result cannot be drawn, in the reader's terms.
+
+    Three different shapes reach here, and saying "no numeric column" about a
+    frame holding one numeric column sends the reader looking for the wrong
+    thing — a single correlation coefficient is undrawable because there is
+    nothing to plot it *against*, not because it isn't a number.
+    """
+    if frame.height == 0:
+        return "the result is empty"
+    if not any(dtype.is_numeric() for dtype in frame.schema.values()):
+        return "the result has no numeric column to plot"
+    return (
+        f"a chart needs a column to plot against, and the result is a single column "
+        f"({frame.columns[0]!r}). Ask for the values behind the number"
+    )
 
 
 def validate_spec(payload: Any, frame: pl.DataFrame) -> ChartSpec | None:

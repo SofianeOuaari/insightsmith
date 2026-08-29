@@ -258,6 +258,51 @@ def test_ollama_chat_maps_its_own_token_counts() -> None:
     assert (completion.usage.input_tokens, completion.usage.output_tokens) == (7, 3)
 
 
+def _recording_ollama(show: dict[str, Any]) -> tuple[OllamaProvider, list[dict[str, Any]]]:
+    """An Ollama stub that answers /api/show and keeps every chat payload."""
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/show":
+            return httpx.Response(200, json=show)
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"model": "m", "message": {"role": "assistant", "content": "ok"}}
+        )
+
+    return OllamaProvider(client=_transport(handler)), sent
+
+
+def test_ollama_states_the_context_it_needs() -> None:
+    """Left unsaid, Ollama assumes 2048 and truncates the front of the prompt.
+
+    That silently discards the system prompt and the dataset card — the model
+    answers from the tail of the question and nothing in the reply says so.
+    """
+    provider, sent = _recording_ollama(OLLAMA_SHOW_TOOLS)
+    provider.chat("qwen3:8b", [Message(role="user", content="hi")])
+    assert sent[0]["options"]["num_ctx"] == 2048
+
+
+def test_ollama_grows_the_context_to_fit_a_long_prompt() -> None:
+    provider, sent = _recording_ollama(OLLAMA_SHOW_TOOLS)
+    provider.chat("qwen3:8b", [Message(role="user", content="x" * 30_000)])
+    assert sent[0]["options"]["num_ctx"] == 16_384
+
+
+def test_ollama_never_asks_for_more_context_than_the_model_has() -> None:
+    """llama here declares 8192; asking for 32k would fail or thrash, not help."""
+    provider, sent = _recording_ollama(OLLAMA_SHOW_NO_TOOLS)
+    provider.chat("llama3:8b", [Message(role="user", content="x" * 200_000)])
+    assert sent[0]["options"]["num_ctx"] == 8192
+
+
+def test_a_caller_can_size_the_context_itself() -> None:
+    provider, sent = _recording_ollama(OLLAMA_SHOW_TOOLS)
+    provider.chat("qwen3:8b", [Message(role="user", content="hi")], num_ctx=4096)
+    assert sent[0]["options"]["num_ctx"] == 4096
+
+
 # --------------------------------------------------------------------------- #
 # config
 # --------------------------------------------------------------------------- #

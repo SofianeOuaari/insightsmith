@@ -44,3 +44,9 @@ CLAUDE.md
 docs/
 # Example Dataset
 data_example/
+
+# attachments
+attachments/
+
+# Default --out directory for ismith ask --chart
+insightsmith-out/

@@ -24,6 +24,20 @@ DEFAULT_HOST: Final = "http://localhost:11434"
 #: first token, and a premature timeout looks like a hang to the caller.
 DEFAULT_TIMEOUT: Final = 300.0
 _DEFAULT_CONTEXT: Final = 4096
+#: Ollama defaults ``num_ctx`` to 2048 and silently *truncates from the front* of
+#: anything longer — which throws away the system prompt and the dataset card and
+#: leaves the model answering from the tail of the question. Nothing in the reply
+#: says this happened. So every request states the context it needs.
+#:
+#: Deliberately pessimistic: JSON and code tokenize nearer 3 characters per token
+#: than English prose's 4, and over-asking costs a little KV cache where
+#: under-asking costs the prompt.
+_CHARS_PER_TOKEN: Final = 3.0
+#: Room for the reply on top of the prompt.
+_CONTEXT_HEADROOM: Final = 1024
+#: Changing ``num_ctx`` makes Ollama reload the model, so round to powers of two:
+#: a request settles onto one of a handful of sizes and stops thrashing.
+_CONTEXT_FLOOR: Final = 2048
 
 
 class OllamaProvider:
@@ -127,6 +141,20 @@ class OllamaProvider:
             vision="vision" in listed,
         )
 
+    def context_for(self, model: str, messages: Sequence[Message], extra: int = 0) -> int:
+        """The ``num_ctx`` this request needs, capped by what the model has.
+
+        Sized to the prompt rather than to the model's maximum: a 128k model
+        asked a short question should not allocate a 128k KV cache.
+        """
+        chars = sum(len(message.content) for message in messages) + extra
+        needed = int(chars / _CHARS_PER_TOKEN) + _CONTEXT_HEADROOM
+        window = self.capabilities(model).context_window
+        size = _CONTEXT_FLOOR
+        while size < needed and size < window:
+            size *= 2
+        return min(size, window)
+
     def thinks(self, model: str) -> bool:
         """Whether the model emits a separate reasoning stream."""
         listed = {str(c).lower() for c in (self.show(model).get("capabilities") or [])}
@@ -169,8 +197,11 @@ class OllamaProvider:
         for passthrough in ("keep_alive",):
             if passthrough in options:
                 payload[passthrough] = options.pop(passthrough)
-        if options:
-            payload["options"] = options
+        options.setdefault(
+            "num_ctx",
+            self.context_for(model, messages, extra=len(json.dumps(tools or []))),
+        )
+        payload["options"] = options
 
         body = self._request("POST", "/api/chat", payload)
         message = (body or {}).get("message") or {}
@@ -186,6 +217,7 @@ class OllamaProvider:
         )
 
     def stream(self, model: str, messages: Sequence[Message], **options: Any) -> Iterator[Chunk]:
+        options.setdefault("num_ctx", self.context_for(model, messages))
         payload = {
             "model": model,
             "messages": [m.as_wire() for m in messages],

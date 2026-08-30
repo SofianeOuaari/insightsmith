@@ -246,3 +246,29 @@ def test_the_child_gets_what_it_needs_and_nothing_secret(monkeypatch) -> None:
         assert secret not in env, f"{secret} reached the sandbox"
     assert env["POLARS_SKIP_CPU_CHECK"] == "1"
     assert env["POLARS_MAX_THREADS"] == "4"
+
+
+def test_a_lazyframe_result_is_collected(frame: pl.DataFrame) -> None:
+    """The guide teaches lazy-first, so the runner has to accept a query plan.
+
+    Before this, a LazyFrame fell past the DataFrame check into the repr branch
+    and came back as `ok=True` with `<LazyFrame at 0x...>` as the answer — a
+    success the retry loop had no reason to question.
+    """
+    code = "result = df.lazy().group_by('region').agg(pl.col('rev').sum())"
+    outcome = run(code, frame, limits=Limits(timeout_seconds=30), gate=check(code))
+
+    assert outcome.ok
+    assert outcome.kind == "frame"
+    assert outcome.frame is not None
+    assert outcome.frame.height == 3
+    assert "LazyFrame" not in repr(outcome.value)
+
+
+def test_a_lazy_plan_that_cannot_execute_reports_the_real_error(frame: pl.DataFrame) -> None:
+    """Collecting inside the try is what makes this a failure and not a repr."""
+    code = "result = df.lazy().select(pl.col('nope'))"
+    outcome = run(code, frame, limits=Limits(timeout_seconds=30), gate=check(code))
+
+    assert not outcome.ok
+    assert "nope" in outcome.traceback

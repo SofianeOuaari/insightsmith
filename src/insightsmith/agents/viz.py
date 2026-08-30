@@ -121,6 +121,10 @@ def validate_spec(payload: Any, frame: pl.DataFrame) -> ChartSpec | None:
     x, y = str(payload.get("x") or ""), str(payload.get("y") or "")
     if x not in frame.columns or y not in frame.columns:
         return None
+    # A column plotted against itself is a diagonal line that says nothing, and
+    # it is what a model reaches for when a result has only one column to offer.
+    if x == y:
+        return None
     if not frame.schema[y].is_numeric():
         return None
 

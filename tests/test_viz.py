@@ -15,7 +15,16 @@ import pytest
 
 from insightsmith.agents.viz import _undrawable, default_spec, validate_spec
 from insightsmith.execution.artifacts import ArtifactStore, slugify
-from insightsmith.viz.render import MAX_CATEGORIES, ChartSpec, Form, render_html, render_png
+from insightsmith.viz.render import (
+    MAX_CATEGORIES,
+    ChartSpec,
+    Form,
+    _draw,
+    _effective_form,
+    _prepare,
+    render_html,
+    render_png,
+)
 from insightsmith.viz.theme import MAX_SERIES, SCATTER_MAX_SERIES, theme_for
 
 
@@ -259,3 +268,89 @@ def test_a_corrupt_manifest_does_not_break_the_next_write(tmp_path: Path) -> Non
     store.manifest_path.write_text("{ not json", encoding="utf-8")
     store.write_bytes("b.png", b"b")
     assert len(store.entries()) == 1
+
+
+# --------------------------------------------------------------------------- #
+# a chart must not assert something the data does not contain
+# --------------------------------------------------------------------------- #
+
+
+def test_grouped_bars_get_their_own_slot() -> None:
+    """Series drawn at one position hide each other and read as a stack.
+
+    Nine bars must occupy nine positions. Sharing them means the first series
+    disappears and the survivors imply totals nobody computed.
+    """
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    frame = pl.DataFrame(
+        {
+            "region": ["N", "S", "E"] * 3,
+            "revenue": [10.0, 20.0, 30.0, 15.0, 25.0, 35.0, 12.0, 22.0, 32.0],
+            "year": ["2024"] * 3 + ["2025"] * 3 + ["2026"] * 3,
+        }
+    )
+    spec = ChartSpec(form=Form.COLUMN, x="region", y="revenue", series="year")
+
+    figure, axes = plt.subplots()
+    _draw(axes, spec, _prepare(spec, frame), theme_for("light"))
+    positions = [patch.get_x() for patch in axes.patches]
+    plt.close(figure)
+
+    assert len(positions) == 9
+    assert len(set(positions)) == 9, "two series are sharing a bar position"
+
+
+def test_a_line_sorts_an_axis_whose_order_it_asserts() -> None:
+    """group_by does not maintain order, and that is where trends come from."""
+    frame = pl.DataFrame({"month": [7, 2, 11, 4, 1], "revenue": [80.0, 25.0, 40.0, 95.0, 15.0]})
+    spec = ChartSpec(form=Form.LINE, x="month", y="revenue")
+
+    assert _prepare(spec, frame)["month"].to_list() == [1, 2, 4, 7, 11]
+
+
+def test_a_line_leaves_a_string_axis_in_the_order_it_arrived() -> None:
+    """Alphabetising month names would be worse than the order already chosen."""
+    frame = pl.DataFrame({"m": ["Jan", "Feb", "Mar"], "v": [3.0, 1.0, 2.0]})
+    spec = ChartSpec(form=Form.LINE, x="m", y="v")
+
+    assert _prepare(spec, frame)["m"].to_list() == ["Jan", "Feb", "Mar"]
+
+
+def test_bars_keep_the_ranking_they_arrived_with() -> None:
+    """Ordering is the bar chart's job; sorting must not have been lost."""
+    frame = pl.DataFrame({"k": ["mid", "big", "small"], "v": [50.0, 100.0, 10.0]})
+    spec = ChartSpec(form=Form.BAR, x="k", y="v")
+
+    assert _prepare(spec, frame)["v"].to_list() == [100.0, 50.0, 10.0]
+
+
+def test_several_areas_become_lines_rather_than_hiding_each_other() -> None:
+    """Filled areas occlude, and where they overlap they mix an unvalidated hue."""
+    data = pl.DataFrame({"m": [1, 2], "v": [1.0, 2.0]})
+    parts = [("a", data), ("b", data)]
+    spec = ChartSpec(form=Form.AREA, x="m", y="v", series="g")
+
+    assert _effective_form(spec, parts) is Form.LINE
+    assert _effective_form(spec, parts[:1]) is Form.AREA
+
+
+def test_both_renderers_put_the_largest_bar_first(sales: pl.DataFrame) -> None:
+    """matplotlib inverts the y axis; plotly counts up from the origin."""
+    spec = ChartSpec(form=Form.BAR, x="Product Type", y="Total Sales")
+    assert '"reversed"' in render_html(spec, sales)
+
+    column = ChartSpec(form=Form.COLUMN, x="Product Type", y="Total Sales")
+    assert '"reversed"' not in render_html(column, sales)
+
+
+def test_a_column_plotted_against_itself_is_refused_not_crashed() -> None:
+    """It is what a model reaches for when the result has only one column."""
+    frame = pl.DataFrame({"v": [3.0, 1.0, 2.0]})
+
+    assert validate_spec({"form": "scatter", "x": "v", "y": "v"}, frame) is None
+    # And the renderer survives one built by hand, rather than leaking DuplicateError.
+    assert ChartSpec(form=Form.SCATTER, x="v", y="v").columns == ["v"]
+    assert render_png(ChartSpec(form=Form.SCATTER, x="v", y="v"), frame)

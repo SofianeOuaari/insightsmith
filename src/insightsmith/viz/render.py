@@ -29,6 +29,9 @@ __all__ = ["ChartSpec", "Form", "render_html", "render_png"]
 
 #: Beyond this many categories a bar chart is a wall; the tail folds into "other".
 MAX_CATEGORIES: Final = 20
+#: Bar thickness for one series, and the width a whole group of them shares.
+_SINGLE_BAR: Final = 0.62
+_BAR_GROUP: Final = 0.8
 _OTHER: Final = "other"
 
 
@@ -57,7 +60,17 @@ class ChartSpec:
 
     @property
     def columns(self) -> list[str]:
-        return [c for c in (self.x, self.y, self.series) if c]
+        """The columns this spec needs, each named once.
+
+        A spec that puts the same column on both axes is nonsense, but it must
+        not be a crash: selecting a name twice raises ``DuplicateError`` deep in
+        polars, which surfaces to the reader as chart machinery leaking.
+        """
+        named: list[str] = []
+        for name in (self.x, self.y, self.series):
+            if name and name not in named:
+                named.append(name)
+        return named
 
 
 def render_png(spec: ChartSpec, frame: pl.DataFrame, *, mode: str = "light") -> bytes:
@@ -92,11 +105,15 @@ def render_html(spec: ChartSpec, frame: pl.DataFrame, *, mode: str = "light") ->
     from insightsmith.viz.theme import plotly_template
 
     data = _prepare(spec, frame)
+    parts = _split(spec, data)
+    form = _effective_form(spec, parts)
+    horizontal = form is Form.BAR
+
     figure = go.Figure()
-    for index, (name, part) in enumerate(_split(spec, data)):
+    for index, (name, part) in enumerate(parts):
         colour = theme.colour(index)
         xs, ys = part[spec.x].to_list(), part[spec.y].to_list()
-        if spec.form in {Form.LINE, Form.AREA}:
+        if form in {Form.LINE, Form.AREA}:
             figure.add_trace(
                 go.Scatter(
                     x=xs,
@@ -104,11 +121,11 @@ def render_html(spec: ChartSpec, frame: pl.DataFrame, *, mode: str = "light") ->
                     name=name,
                     mode="lines",
                     line={"color": colour, "width": 2},
-                    fill="tozeroy" if spec.form is Form.AREA else None,
+                    fill="tozeroy" if form is Form.AREA else None,
                     hovertemplate=f"%{{x}}<br>{spec.y}: %{{y}}<extra>{name}</extra>",
                 )
             )
-        elif spec.form is Form.SCATTER:
+        elif form is Form.SCATTER:
             figure.add_trace(
                 go.Scatter(
                     x=xs,
@@ -120,7 +137,6 @@ def render_html(spec: ChartSpec, frame: pl.DataFrame, *, mode: str = "light") ->
                 )
             )
         else:
-            horizontal = spec.form is Form.BAR
             figure.add_trace(
                 go.Bar(
                     x=ys if horizontal else xs,
@@ -136,7 +152,6 @@ def render_html(spec: ChartSpec, frame: pl.DataFrame, *, mode: str = "light") ->
     # Merge rather than spread-and-override: the template already carries a
     # `title` key (its font), so passing title= alongside it collides.
     layout: dict[str, Any] = dict(plotly_template(theme)["layout"])
-    horizontal = spec.form is Form.BAR
     layout["title"] = {**layout.get("title", {}), "text": spec.title or ""}
     layout["xaxis"] = {
         **layout.get("xaxis", {}),
@@ -146,6 +161,12 @@ def render_html(spec: ChartSpec, frame: pl.DataFrame, *, mode: str = "light") ->
         **layout.get("yaxis", {}),
         "title": {"text": spec.y_label or (spec.x if horizontal else spec.y)},
     }
+    if horizontal:
+        # matplotlib inverts the y axis so the largest bar reads first. Plotly
+        # counts categories upward from the origin, which would hand the same
+        # spec back as its own mirror image.
+        layout["yaxis"] = {**layout["yaxis"], "autorange": "reversed"}
+    layout["barmode"] = "group"
     layout["showlegend"] = spec.series is not None
     layout["margin"] = {"l": 60, "r": 24, "t": 56, "b": 48}
     figure.update_layout(**layout)
@@ -165,6 +186,8 @@ def _prepare(spec: ChartSpec, frame: pl.DataFrame) -> pl.DataFrame:
         raise ValueError(msg)
 
     data = frame.select(spec.columns).drop_nulls()
+    if spec.form in {Form.LINE, Form.AREA}:
+        data = _order_axis(data, spec)
     if spec.series is None:
         return _fold_categories(data, spec)
 
@@ -182,6 +205,21 @@ def _prepare(spec: ChartSpec, frame: pl.DataFrame) -> pl.DataFrame:
             .otherwise(pl.lit(_OTHER))
             .alias(spec.series)
         )
+    return data
+
+
+def _order_axis(data: pl.DataFrame, spec: ChartSpec) -> pl.DataFrame:
+    """Sort an ordered x axis, because a line claims the sequence means something.
+
+    ``group_by`` does not maintain order, and a grouped aggregate is exactly
+    where "revenue by month" comes from — drawn in hash order a trend reads as a
+    scribble rather than a trend. Only genuinely ordered dtypes are sorted: a
+    string axis is left alone, because its order may already be deliberate
+    (month names, size buckets) and alphabetising it would be worse.
+    """
+    dtype = data.schema[spec.x]
+    if dtype.is_temporal() or dtype.is_numeric():
+        return data.sort(spec.x)
     return data
 
 
@@ -205,6 +243,19 @@ def _fold_categories(data: pl.DataFrame, spec: ChartSpec) -> pl.DataFrame:
     return pl.concat([head, tail])
 
 
+def _effective_form(spec: ChartSpec, parts: list[tuple[str, pl.DataFrame]]) -> Form:
+    """The form actually drawn, which is the spec's unless it cannot be read.
+
+    Filled areas stacked on one surface hide each other, and where they overlap
+    they mix a colour that is in no validated slot. An area chart is a
+    single-series form; asked for several, draw the lines instead of drawing
+    something the reader cannot decode.
+    """
+    if spec.form is Form.AREA and len(parts) > 1:
+        return Form.LINE
+    return spec.form
+
+
 def _split(spec: ChartSpec, data: pl.DataFrame) -> list[tuple[str, pl.DataFrame]]:
     """One (name, frame) per series, in a stable order."""
     if spec.series is None:
@@ -220,35 +271,87 @@ def _split(spec: ChartSpec, data: pl.DataFrame) -> list[tuple[str, pl.DataFrame]
 
 def _draw(axes: Any, spec: ChartSpec, data: pl.DataFrame, theme: Theme) -> None:
     parts = _split(spec, data)
+    form = _effective_form(spec, parts)
     single = len(parts) == 1
 
-    for index, (name, part) in enumerate(parts):
-        # One series means one hue. A different colour per bar would imply an
-        # identity distinction the data does not have.
-        colour = theme.series[0] if single else theme.colour(index)
-        xs, ys = part[spec.x].to_list(), part[spec.y].to_list()
+    if form in {Form.BAR, Form.COLUMN}:
+        _draw_bars(axes, spec, form, parts, theme, single=single)
+    else:
+        for index, (name, part) in enumerate(parts):
+            # One series means one hue. A different colour per bar would imply an
+            # identity distinction the data does not have.
+            colour = theme.series[0] if single else theme.colour(index)
+            xs, ys = part[spec.x].to_list(), part[spec.y].to_list()
+            if form is Form.LINE:
+                axes.plot(xs, ys, color=colour, label=name)
+            elif form is Form.AREA:
+                axes.fill_between(range(len(xs)), ys, color=colour, alpha=0.85, label=name)
+                axes.set_xticks(range(len(xs)))
+                axes.set_xticklabels(xs)
+            else:
+                axes.scatter(xs, ys, color=colour, label=name, s=64, edgecolor=theme.surface)
 
-        if spec.form is Form.BAR:
-            bars = axes.barh(xs, ys, color=colour, label=name, height=0.62)
-            _value_labels(axes, bars, single, theme)
-        elif spec.form is Form.COLUMN:
-            bars = axes.bar(xs, ys, color=colour, label=name, width=0.62)
-            _value_labels(axes, bars, single, theme)
-        elif spec.form is Form.LINE:
-            axes.plot(xs, ys, color=colour, label=name)
-        elif spec.form is Form.AREA:
-            axes.fill_between(range(len(xs)), ys, color=colour, alpha=0.85, label=name)
-            axes.set_xticks(range(len(xs)))
-            axes.set_xticklabels(xs)
-        else:
-            axes.scatter(xs, ys, color=colour, label=name, s=64, edgecolor=theme.surface)
-
-    if spec.form is Form.BAR:
+    if form is Form.BAR:
         axes.invert_yaxis()  # largest at the top, reading order
         axes.grid(axis="x")
         axes.grid(axis="y", visible=False)
     if not single:
         axes.legend(loc="best")
+
+
+def _draw_bars(
+    axes: Any,
+    spec: ChartSpec,
+    form: Form,
+    parts: list[tuple[str, pl.DataFrame]],
+    theme: Theme,
+    *,
+    single: bool,
+) -> None:
+    """Bars for every series, side by side within each category.
+
+    Drawing each series at the same position does not overlap harmlessly: the
+    series drawn first disappears underneath, and what is left reads as a
+    *stacked* chart, so the reader takes totals off it that the data never
+    contained. Explicit slots make the grouping real.
+    """
+    categories = _categories(parts, spec.x)
+    slot = {name: index for index, name in enumerate(categories)}
+    span = (_SINGLE_BAR if single else _BAR_GROUP) / len(parts)
+    horizontal = form is Form.BAR
+
+    for index, (name, part) in enumerate(parts):
+        colour = theme.series[0] if single else theme.colour(index)
+        offset = (index - (len(parts) - 1) / 2) * span
+        at = [slot[key] + offset for key in part[spec.x].to_list()]
+        values = part[spec.y].to_list()
+        size = span if single else span * 0.9
+        if horizontal:
+            bars = axes.barh(at, values, color=colour, label=name, height=size)
+        else:
+            bars = axes.bar(at, values, color=colour, label=name, width=size)
+        _value_labels(axes, bars, single, theme)
+
+    ticks = list(range(len(categories)))
+    labels = [str(name) for name in categories]
+    if horizontal:
+        axes.set_yticks(ticks)
+        axes.set_yticklabels(labels)
+    else:
+        axes.set_xticks(ticks)
+        axes.set_xticklabels(labels)
+
+
+def _categories(parts: list[tuple[str, pl.DataFrame]], column: str) -> list[Any]:
+    """Every category any series uses, in the order they first appear."""
+    seen: list[Any] = []
+    known: set[Any] = set()
+    for _, part in parts:
+        for value in part[column].to_list():
+            if value not in known:
+                known.add(value)
+                seen.append(value)
+    return seen
 
 
 def _value_labels(axes: Any, bars: Any, single: bool, theme: Theme) -> None:

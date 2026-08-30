@@ -49,6 +49,11 @@ fig = None
 try:
     _src = (_dir / "snippet.py").read_text(encoding="utf-8")
     exec(compile(_src, "snippet.py", "exec"), globals())
+    # A LazyFrame is a query plan, not an answer. Collecting it here rather than
+    # rejecting it keeps the guide's lazy-first advice usable, and doing it
+    # inside the try means a plan that fails to execute reports the real error.
+    if isinstance(result, pl.LazyFrame):
+        result = result.collect()
 except BaseException:
     import traceback
     (_dir / "error.txt").write_text(traceback.format_exc(), encoding="utf-8")

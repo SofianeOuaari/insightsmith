@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.7.0] - 2026-09-01
+
+### Features
+
+- **critique**: Measure what can be measured, ask only what cannot
+
 ## [0.6.3] - 2026-08-30
 
 ### Bug fixes

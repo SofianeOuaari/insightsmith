@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.7.2] - 2026-09-01
+
+### Bug fixes
+
+- **coder,critique**: Say what to use, and catch counts that became floats
+
 ## [0.7.1] - 2026-09-01
 
 ### Bug fixes

@@ -13,7 +13,7 @@ import pytest
 
 from insightsmith.io.sniff import sniff
 from insightsmith.profiling import profile_with_sample
-from insightsmith.profiling.card import MAX_CARD_BYTES, build_card
+from insightsmith.profiling.card import MAX_CARD_BYTES, DatasetCard, build_card
 from insightsmith.profiling.pii import is_sensitive_column, mask_text, mask_value
 
 
@@ -170,3 +170,65 @@ def test_card_without_a_frame_still_describes_the_data(samples: dict[str, Path])
     assert card.columns
     assert card.examples == []
     assert card.correlations == []
+
+
+def test_masked_kinds_are_listed_as_the_token_not_as_a_bare_word() -> None:
+    """ "phone" in a card whose other lists are column names reads as a column.
+
+    That is not hypothetical: a model short of usable columns wrote
+    `pl.col("phone")` against a dataset of Pokemon.
+    """
+    card = DatasetCard(name="d", n_rows=1, n_columns=1, estimated=False)
+    card.masked_kinds = ["phone", "email"]
+
+    payload = card.to_dict()
+
+    assert payload["masked"] == ["<phone>", "<email>"]
+    assert "phone" not in json.dumps(payload["masked"]).replace("<phone>", "")
+
+
+def test_a_very_wide_frame_says_how_much_it_could_not_show(tmp_path: Path) -> None:
+    """Silently truncating the schema is what misleads; saying so is not."""
+    names = [f"measurement_column_{i}" for i in range(600)]
+    path = tmp_path / "wide.csv"
+    path.write_text(
+        ",".join(names) + "\n" + ",".join(str(i) for i in range(600)) + "\n", encoding="utf-8"
+    )
+    result, frame = profile_with_sample(sniff(path))
+
+    card = build_card(result, frame)
+
+    assert card.size_bytes <= MAX_CARD_BYTES
+    assert card.omitted_columns > 0
+    assert card.to_dict()["columns_omitted_for_size"] == card.omitted_columns
+    assert len(card.columns) + card.omitted_columns == card.n_columns
+
+
+def test_an_ordinary_frame_omits_nothing(tmp_path: Path) -> None:
+    path = tmp_path / "small.csv"
+    path.write_text("region,revenue\nnorth,1.0\nsouth,2.0\n", encoding="utf-8")
+    result, frame = profile_with_sample(sniff(path))
+    card = build_card(result, frame)
+
+    assert card.omitted_columns == 0
+    assert "columns_omitted_for_size" not in card.to_dict()
+
+
+def test_numeric_prose_in_brackets_is_not_a_phone_number() -> None:
+    """The chain this broke: a false positive lands "phone" on the card, and a
+    model short of columns writes `pl.col("phone")` against a Pokemon dataset."""
+    for text in (
+        "200 (26.1% with PokeBall, full HP)",
+        "20 (4,884-5,140 steps)",
+        "50 (normal)",
+        "135.5 kg (298.7 lbs)",
+    ):
+        masked, kinds = mask_text(text)
+        assert kinds == set(), f"{text!r} was masked as {kinds}"
+        assert masked == text
+
+
+def test_real_phone_numbers_are_still_masked() -> None:
+    for text in ("+1 (555) 123-4567", "555-123-4567", "call 07700 900123 now"):
+        _, kinds = mask_text(text)
+        assert kinds == {"phone"}, text

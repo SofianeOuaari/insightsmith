@@ -38,6 +38,10 @@ _SUMMARY_CHARS: Final = 300
 _ERROR_CHARS: Final = 1500
 #: Lines kept from the exception onward — the class, then whatever it added.
 _SUMMARY_LINES: Final = 3
+#: Errors that mean the model named a column the data does not have.
+_COLUMN_MISSING = re.compile(r"ColumnNotFound|not found|unable to find column", re.I)
+#: Enough of the schema to correct a guess without spending the whole context.
+_COLUMNS_SHOWN: Final = 60
 _FENCE = re.compile(r"```(?:python)?\s*(.*?)```", re.S)
 _SNIPPET_FRAME = re.compile(r'File "snippet\.py", line (\d+)')
 _EXCEPTION = re.compile(r"^[A-Za-z_][\w.]*(?:Error|Exception|Warning|Interrupt|Exit)\b")
@@ -171,7 +175,7 @@ class CoderAgent(Agent):
             code = extract_code(payload)
             explanation = str(payload.get("explanation") or "").strip()
             if not code:
-                prompt = self._retry(question, "", "the reply contained no code")
+                prompt = self._retry(question, "", "the reply contained no code", card)
                 history.append(Attempt(code="", ok=False, error="no code in the reply"))
                 continue
 
@@ -181,7 +185,7 @@ class CoderAgent(Agent):
             verdict = check(code)
             if not verdict.allowed:
                 history.append(Attempt(code=code, ok=False, refused=list(verdict.reasons)))
-                prompt = self._retry(question, code, "; ".join(verdict.reasons))
+                prompt = self._retry(question, code, "; ".join(verdict.reasons), card)
                 continue
 
             outcome = run(code, frame, limits=self.limits, gate=verdict)
@@ -220,7 +224,7 @@ class CoderAgent(Agent):
 
             error = _failure_text(outcome)
             history.append(Attempt(code=code, ok=False, error=error))
-            prompt = self._retry(question, code, error)
+            prompt = self._retry(question, code, error, card)
 
         if not history:
             raise ProviderError("no attempt was made")
@@ -229,14 +233,14 @@ class CoderAgent(Agent):
             f"Last failure: {_summarise(history[-1])}"
         )
 
-    def _retry(self, question: str, code: str, error: str) -> str:
+    def _retry(self, question: str, code: str, error: str, card: DatasetCard | None = None) -> str:
         """Re-retrieve against the failure as well as the question.
 
         A traceback names the thing the model got wrong — ``no attribute
         'groupby'`` — which is a far sharper query than the question was.
         """
         return self.reference_for(question, failure=_exception_lines(error)) + _retry_prompt(
-            question, code, error
+            question, code, error, _existing_columns(error, card)
         )
 
 
@@ -340,12 +344,32 @@ def _rejected_prompt(question: str, code: str, reason: str) -> str:
     )
 
 
-def _retry_prompt(question: str, code: str, error: str) -> str:
+def _existing_columns(error: str, card: DatasetCard | None) -> str:
+    """The real column list, but only when the model just invented one.
+
+    A missing-column error is the one failure where repeating the schema is
+    worth its tokens: the model has stopped reading the card and started
+    guessing, and nothing else in the retry contradicts the guess.
+    """
+    if card is None or not _COLUMN_MISSING.search(error):
+        return ""
+    names = sorted(card.column_names())
+    if not names:
+        return ""
+    shown = ", ".join(repr(name) for name in names[:_COLUMNS_SHOWN])
+    if len(names) > _COLUMNS_SHOWN:
+        shown += f", and {len(names) - _COLUMNS_SHOWN} more"
+    return shown
+
+
+def _retry_prompt(question: str, code: str, error: str, columns: str = "") -> str:
+    schema = f"\n--- the columns that exist ---\n{columns}\n" if columns else ""
     return (
         f"Question: {question}\n\n"
         f"Your previous snippet failed.\n\n"
         f"--- code ---\n{code}\n\n"
-        f"--- failure ---\n{error}\n\n"
+        f"--- failure ---\n{error}\n"
+        f"{schema}\n"
         "Fix it. Reply with the corrected snippet, still assigning to `result`. "
         "Remember this is Polars: group_by, filter(pl.col(...)), select, with_columns."
     )

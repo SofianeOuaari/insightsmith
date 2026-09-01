@@ -34,6 +34,18 @@ DEFAULT_EXAMPLES: Final = 5
 CORRELATION_FLOOR: Final = 0.5
 MAX_CORRELATIONS: Final = 8
 _MAX_TOP_VALUES: Final = 3
+#: Masked kinds are listed as the placeholder the reader will actually meet in
+#: the examples. Listing them as bare words — "phone" — puts things that look
+#: exactly like column names in a card whose every other list *is* column names,
+#: and a model short of usable columns will reach for one.
+_MASK_TOKENS: Final[dict[str, str]] = {
+    "email": "<email>",
+    "ip": "<ip>",
+    "iban": "<iban>",
+    "national_id": "<id>",
+    "card": "<card>",
+    "phone": "<phone>",
+}
 _MAX_CELL_CHARS: Final = 40
 
 
@@ -52,6 +64,8 @@ class DatasetCard:
     examples: list[dict[str, str]] = field(default_factory=list)
     masked_kinds: list[str] = field(default_factory=list)
     redacted_columns: list[str] = field(default_factory=list)
+    #: Columns the budget could not fit. Zero unless the frame is very wide.
+    omitted_columns: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -66,8 +80,9 @@ class DatasetCard:
             ("correlations", self.correlations),
             ("candidate_keys", self.candidate_keys),
             ("examples", self.examples),
+            ("columns_omitted_for_size", self.omitted_columns),
             ("redacted_columns", self.redacted_columns),
-            ("masked", self.masked_kinds),
+            ("masked", [_MASK_TOKENS.get(kind, kind) for kind in self.masked_kinds]),
         ):
             if value:
                 payload[key] = value
@@ -255,7 +270,12 @@ def _fit_budget(card: DatasetCard, max_bytes: int) -> None:
         card.examples.pop()
     while len(card.correlations) > 1 and card.size_bytes > max_bytes:
         card.correlations.pop()
-    while len(card.quality) > 3 and card.size_bytes > max_bytes:
+    # Candidate keys go before quality notes: on a wide frame nearly every column
+    # is trivially unique, so the list is both the longest thing here and the
+    # least informative.
+    while card.candidate_keys and card.size_bytes > max_bytes:
+        card.candidate_keys.pop()
+    while card.quality and card.size_bytes > max_bytes:
         card.quality.pop()
 
     # Per-column detail goes last and in order of dispensability. A wide frame
@@ -266,6 +286,14 @@ def _fit_budget(card: DatasetCard, max_bytes: int) -> None:
             return
         for entry in card.columns:
             entry.pop(key, None)
+
+    # A frame wide enough that even bare names overflow cannot be described in
+    # full, and pretending otherwise is what actually misleads: the card would
+    # silently carry a truncated list an agent reads as the whole schema. Say how
+    # many are missing instead, so "the column I need may not be here" is legible.
+    while len(card.columns) > 1 and card.size_bytes > max_bytes:
+        card.columns.pop()
+        card.omitted_columns = card.n_columns - len(card.columns)
 
 
 def _round(value: float) -> float | int:

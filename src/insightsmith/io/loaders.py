@@ -33,6 +33,12 @@ LOADABLE_FORMATS: Final = frozenset(
     }
 )
 
+#: Name given to the key of a records-keyed-by-id JSON document, which has none
+#: of its own.
+KEY_COLUMN: Final = "key"
+#: Two keyed records could be a coincidence; this many is a table.
+_MIN_KEYED_RECORDS: Final = 3
+
 # polars accepts only these for CSV; anything else has to be transcoded first.
 _NATIVE_ENCODINGS: Final = frozenset({"utf-8", "utf8", "ascii", "utf-8-sig"})
 
@@ -84,7 +90,40 @@ def load(spec: SourceSpec) -> pl.LazyFrame:
             return pl.read_ndjson(io.BytesIO(payload)).lazy()
         return pl.scan_ndjson(spec.path)
     # JSON is a single document: there is nothing to stream.
-    return pl.read_json(io.BytesIO(payload) if payload is not None else spec.path).lazy()
+    frame = pl.read_json(io.BytesIO(payload) if payload is not None else spec.path)
+    return _unkey(frame).lazy()
+
+
+def _unkey(frame: pl.DataFrame) -> pl.DataFrame:
+    """Turn records-keyed-by-id into rows.
+
+    ``{"Abomasnow": {...}, "Starly": {...}}`` is how a table gets serialised when
+    each row already has a natural identifier — it is what pandas writes for
+    ``orient="index"`` — but read literally it is one row a thousand columns
+    wide, with every real field buried in a struct. Every column that should have
+    been queryable is a value instead, so a question about any of them cannot be
+    answered at all.
+
+    The shape is only claimed when it is unambiguous: a single row, several
+    struct columns, and every struct carrying identical fields. A genuinely wide
+    one-row document fails that test and is left exactly as it was.
+    """
+    if frame.height != 1 or frame.width < _MIN_KEYED_RECORDS:
+        return frame
+    fields: set[tuple[str, ...]] = set()
+    for dtype in frame.schema.values():
+        if not isinstance(dtype, pl.Struct):
+            return frame
+        fields.add(tuple(field.name for field in dtype.fields))
+        if len(fields) > 1:
+            return frame
+    names = next(iter(fields), ())
+    if not names or KEY_COLUMN in names:
+        return frame
+
+    row = frame.row(0, named=True)
+    records = [{KEY_COLUMN: key, **value} for key, value in row.items() if value is not None]
+    return pl.DataFrame(records) if records else frame
 
 
 def _payload(spec: SourceSpec) -> bytes | None:

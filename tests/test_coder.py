@@ -406,3 +406,37 @@ def test_without_a_critic_nothing_changes(tmp_path: Path, data) -> None:
 
     assert answer.value == 355.0
     assert answer.critique is None
+
+
+def test_a_missing_column_error_is_answered_with_the_real_columns(tmp_path: Path, data) -> None:
+    """The failure that prompted this: the model invented `phone` and kept it.
+
+    A missing-column error is the one failure where repeating the schema earns
+    its tokens — the model has stopped reading the card and started guessing.
+    """
+    card, frame = data
+    agent, prompts = _agent(
+        tmp_path,
+        _code("result = df['phone'].sum()"),
+        _code("result = float(df['revenue'].sum())"),
+    )
+
+    answer = agent.answer(card, frame, "total revenue?")
+
+    assert answer.value == 355.0
+    assert "the columns that exist" in prompts[1]
+    assert "'revenue'" in prompts[1] and "'region'" in prompts[1]
+
+
+def test_an_ordinary_failure_does_not_repeat_the_schema(tmp_path: Path, data) -> None:
+    """It is only worth the tokens when the model has started guessing names."""
+    card, frame = data
+    agent, prompts = _agent(
+        tmp_path,
+        _code("result = 1 / 0"),
+        _code("result = float(df['revenue'].sum())"),
+    )
+
+    agent.answer(card, frame, "total revenue?")
+
+    assert "the columns that exist" not in prompts[1]

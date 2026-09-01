@@ -40,7 +40,11 @@ _IBAN: Final = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b")
 _NATIONAL_ID: Final = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 # Deliberately loose; the Luhn check below decides whether it is really a card.
 _CARD_CANDIDATE: Final = re.compile(r"\b(?:\d[ -]?){13,19}\b")
+# Loose on shape, strict on digit count: the class below also matches ordinary
+# numeric prose like "200 (26.1% ...", so _phone_or_keep decides what really is.
 _PHONE: Final = re.compile(r"(?<!\w)\+?\d[\d\s().-]{7,17}\d(?!\w)")
+#: E.164 allows 15 digits; 7 is the shortest real subscriber number.
+_PHONE_DIGITS: Final = (7, 15)
 
 _MASK: Final = {
     "email": "<email>",
@@ -80,7 +84,28 @@ def mask_text(text: str) -> tuple[str, set[str]]:
     # Card numbers before phones: both match long digit runs, and a Luhn-valid
     # number is far more likely to be a card than a phone.
     masked = _CARD_CANDIDATE.sub(lambda m: _card_or_keep(m.group(0), found), masked)
-    return swap(_PHONE, "phone", masked), found
+    masked = _PHONE.sub(lambda m: _phone_or_keep(m.group(0), found), masked)
+    return masked, found
+
+
+def _phone_or_keep(candidate: str, found: set[str]) -> str:
+    """Only mask what has a phone number's worth of digits.
+
+    The candidate pattern has to be loose about separators, which makes it match
+    any number written with punctuation — "200 (26.1% with PokeBall" among them.
+    Counting digits rather than characters is what separates a phone number from
+    a percentage in brackets, and a false positive here is expensive: the kind
+    ends up listed on the card, where a model short of columns reads "phone" as
+    the name of one.
+    """
+    digits = sum(character.isdigit() for character in candidate)
+    low, high = _PHONE_DIGITS
+    if not low <= digits <= high:
+        return candidate
+    if candidate.count("(") != candidate.count(")"):
+        return candidate
+    found.add("phone")
+    return _MASK["phone"]
 
 
 def mask_value(value: object, *, column: str = "") -> tuple[str, set[str]]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import polars as pl
@@ -118,3 +119,52 @@ def test_lying_extension_still_loads_correctly(samples: dict[str, Path]) -> None
     """A parquet file named .csv loads as parquet, because sniff said so."""
     frame = load(sniff(samples["parquet_as_csv"])).collect()
     assert frame["units"].to_list() == [12, 7, 23, 4, 19]
+
+
+def test_records_keyed_by_id_load_as_rows(tmp_path: Path) -> None:
+    """`{"a": {...}, "b": {...}}` is a table, not one row a thousand columns wide.
+
+    Read literally, every field that should be queryable is buried in a struct
+    and a question about any of them cannot be answered at all.
+    """
+    path = tmp_path / "keyed.json"
+    path.write_text(
+        json.dumps(
+            {
+                "Abomasnow": {"Type": "Grass", "Base Exp": "173"},
+                "Starly": {"Type": "Normal", "Base Exp": "49"},
+                "Charizard": {"Type": "Fire", "Base Exp": "267"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    frame = load(sniff(path)).collect()
+
+    assert frame.height == 3
+    assert frame.columns == ["key", "Type", "Base Exp"]
+    assert sorted(frame["key"].to_list()) == ["Abomasnow", "Charizard", "Starly"]
+    assert frame.filter(pl.col("key") == "Starly")["Type"].item() == "Normal"
+
+
+def test_a_genuinely_wide_single_row_object_is_left_alone(tmp_path: Path) -> None:
+    """The claim is only made when it is unambiguous."""
+    path = tmp_path / "wide.json"
+    path.write_text(
+        json.dumps({"alpha": {"a": 1}, "beta": {"b": 2}, "gamma": {"c": 3}}), encoding="utf-8"
+    )
+
+    frame = load(sniff(path)).collect()
+
+    assert frame.height == 1, "structs with different fields are not keyed records"
+    assert "key" not in frame.columns
+
+
+def test_an_ordinary_array_of_records_is_untouched(tmp_path: Path) -> None:
+    path = tmp_path / "rows.json"
+    path.write_text(json.dumps([{"a": 1, "b": 2}, {"a": 3, "b": 4}]), encoding="utf-8")
+
+    frame = load(sniff(path)).collect()
+
+    assert frame.columns == ["a", "b"]
+    assert frame.height == 2

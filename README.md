@@ -107,6 +107,37 @@ interpreter with a scrubbed environment; CPU, memory and file-size limits;
 a Parquet copy of the data in a scratch directory rather than a path into your
 tree; and `--approve` to see each snippet before it runs.
 
+**Every answer is checked before you see it.** A number is easy to produce and
+hard to trust, so each result is reviewed and the caveats printed under it:
+
+```text
+0.11683640472865998
+
+qualified — read the caveats (confidence 0.70)
+  • Pearson correlation assumes a linear relationship and no heavy tails, but
+    avg_rating and num_published_lectures carry outliers. A few extreme rows can
+    create or hide this number entirely — check it against method="spearman".
+```
+
+Almost everything the critic knows it **measures** rather than asks: a
+correlation reported on outliered columns, a mean on a skewed one, groups of
+three described as a comparison, forty p-values with no correction, a division
+that produced an infinity, missing values the code never acknowledged, and an
+answer computed on a sampled file rather than the whole of it. Those are
+arithmetic, and asking a small model whether statistics are sound produces
+confident prose with nothing behind it — the failure this is meant to reduce,
+not to reproduce.
+
+One judgement is genuinely not computable — did this code answer the question
+that was *asked* — and that is the only part a model is given. If it says no, the
+snippet goes back to the coder with the reason. Statistical caveats never trigger
+a retry: rewriting the snippet cannot make the data less skewed.
+
+The confidence figure is a derived index, not a probability that the answer is
+right. It falls by a fixed weight per caveat so more or worse findings always
+score lower, and identical inputs always score the same. Read the caveats; they
+say something specific. `--no-critique` turns the whole pass off.
+
 Add `--chart` and the answer is drawn as well as printed:
 
 ```bash
@@ -255,6 +286,7 @@ pip install insightsmith            # csv, tsv, parquet, arrow, json, jsonl
 pip install insightsmith[excel]     # + xlsx / xls
 pip install insightsmith[viz]       # + charts (matplotlib, plotly)
 pip install insightsmith[pandas]    # + a .to_pandas() escape hatch
+pip install insightsmith[stats]     # + scipy / statsmodels / scikit-learn
 ```
 
 The base install is six dependencies — polars, typer, rich, charset-normalizer,
@@ -267,7 +299,12 @@ Worth stating plainly, in advance:
 
 - **Large files are profiled on a sample.** Above a size threshold the profile is
   built from a strided sample of the rows, and every affected statistic is marked
-  `estimated`. Row counts remain exact; distributions are approximate.
+  `estimated`. Row counts remain exact; distributions are approximate. An answer
+  computed on such a file carries a caveat saying so.
+- **The critic reduces statistical nonsense; it does not remove it.** It checks a
+  fixed list of things that are computable, so it cannot catch a confounder, a
+  survivorship bias, or a question that was the wrong question to ask. A clean
+  verdict means nothing on the list fired — not that the analysis is sound.
 - **Encoding detection is a guess on small files.** Single-byte codepages are
   genuinely ambiguous in a few hundred bytes. Sparse non-ASCII text is read as
   cp1252 and the substitution is reported, but it can still be wrong.

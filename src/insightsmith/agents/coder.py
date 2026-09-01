@@ -12,16 +12,21 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import polars as pl
 
 from insightsmith.agents.base import Agent
+from insightsmith.critique import Critique
 from insightsmith.errors import ProviderError
 from insightsmith.execution.gate import check
 from insightsmith.execution.sandbox import DEFAULT_LIMITS, Limits, SandboxResult, run
 from insightsmith.knowledge import CODER_EXCLUDES, DEFAULT_BUDGET, reference
+from insightsmith.profiling import Profile
 from insightsmith.profiling.card import DatasetCard
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle: the critic imports Answer
+    from insightsmith.agents.critic import CriticAgent
 
 __all__ = ["MAX_ATTEMPTS", "Answer", "Attempt", "CoderAgent", "extract_code"]
 
@@ -31,8 +36,11 @@ MAX_ATTEMPTS: Final = 3
 _SUMMARY_CHARS: Final = 300
 #: How much traceback goes back to the model on a retry.
 _ERROR_CHARS: Final = 1500
+#: Lines kept from the exception onward — the class, then whatever it added.
+_SUMMARY_LINES: Final = 3
 _FENCE = re.compile(r"```(?:python)?\s*(.*?)```", re.S)
 _SNIPPET_FRAME = re.compile(r'File "snippet\.py", line (\d+)')
+_EXCEPTION = re.compile(r"^[A-Za-z_][\w.]*(?:Error|Exception|Warning|Interrupt|Exit)\b")
 
 CODE_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
@@ -93,6 +101,8 @@ class Answer:
     value: Any = None
     frame: pl.DataFrame | None = None
     attempts: list[Attempt] = field(default_factory=list)
+    #: What the critic made of it, when one was run.
+    critique: Critique | None = None
 
     @property
     def display(self) -> str:
@@ -136,11 +146,19 @@ class CoderAgent(Agent):
         attempts: int = MAX_ATTEMPTS,
         approve: bool = False,
         on_code: Any = None,
+        critic: CriticAgent | None = None,
+        profile: Profile | None = None,
     ) -> Answer:
         """Write code for ``question``, run it, and retry on failure.
 
         ``on_code`` is called with each snippet before it runs; returning False
         aborts. That is the human-in-the-loop layer, off unless asked for.
+
+        With ``critic`` and ``profile``, a snippet that runs is also reviewed
+        (§8's critic → retry arrow). Only one finding sends it back: answering a
+        different question than the one asked. Statistical caveats describe the
+        *data*, and rewriting the snippet cannot make the data less skewed — those
+        ride along on the answer instead.
 
         Raises:
             ProviderError: if no attempt produced a usable answer.
@@ -168,6 +186,26 @@ class CoderAgent(Agent):
 
             outcome = run(code, frame, limits=self.limits, gate=verdict)
             if outcome.ok and outcome.kind != "none":
+                critique = None
+                if critic is not None and profile is not None:
+                    critique = critic.review(
+                        question=question,
+                        code=code,
+                        profile=profile,
+                        card=card,
+                        frame=outcome.frame,
+                        value=outcome.value,
+                    )
+                last = len(history) + 1 >= max(1, attempts)
+                if critique is not None and critique.answered is False and not last:
+                    reason = critique.answered_reason or "it answers a different question"
+                    history.append(
+                        Attempt(code=code, ok=False, error=f"the critic rejected it: {reason}")
+                    )
+                    prompt = self.reference_for(question, failure=reason) + _rejected_prompt(
+                        question, code, reason
+                    )
+                    continue
                 history.append(Attempt(code=code, ok=True))
                 return Answer(
                     question=question,
@@ -177,6 +215,7 @@ class CoderAgent(Agent):
                     value=outcome.value,
                     frame=outcome.frame,
                     attempts=history,
+                    critique=critique,
                 )
 
             error = _failure_text(outcome)
@@ -273,9 +312,32 @@ def _exception_lines(error: str) -> str:
     Frames are paths and line numbers — noise against a Polars guide, and enough
     of it to drown the one line that matters. The model still sees the whole
     traceback; only the query is narrowed.
+
+    Anchoring on the exception rather than taking the last few lines matters:
+    polars 1.44 appends a context stack and a hint *after* it, which a fixed tail
+    window silently cuts the exception class out of.
     """
-    lines = [line for line in error.splitlines() if line.strip() and not line.startswith(" ")]
-    return "\n".join(line for line in lines[-3:] if not line.startswith("Traceback")) or error
+    lines = [
+        line
+        for line in error.splitlines()
+        if line.strip() and not line.startswith((" ", "\t")) and not line.startswith("Traceback")
+    ]
+    if not lines:
+        return error
+    anchors = [index for index, line in enumerate(lines) if _EXCEPTION.match(line)]
+    start = anchors[-1] if anchors else max(0, len(lines) - _SUMMARY_LINES)
+    return "\n".join(lines[start : start + _SUMMARY_LINES])
+
+
+def _rejected_prompt(question: str, code: str, reason: str) -> str:
+    """The snippet ran. It answered something else."""
+    return (
+        f"Question: {question}\n\n"
+        f"Your previous snippet ran without error, but it does not answer the "
+        f"question.\n\n--- code ---\n{code}\n\n--- why ---\n{reason}\n\n"
+        "Write a snippet that answers the question as asked, still assigning to "
+        "`result`."
+    )
 
 
 def _retry_prompt(question: str, code: str, error: str) -> str:

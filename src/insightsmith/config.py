@@ -25,11 +25,12 @@ __all__ = ["DEFAULT_CONFIG_PATH", "Budget", "Config", "load_config"]
 
 DEFAULT_CONFIG_PATH: Final = Path.home() / ".insightsmith" / "config.toml"
 #: Roles the router knows about. Config may name a subset.
-ROLES: Final = ("planner", "coder", "cheap", "vision", "reasoner", "embed")
+ROLES: Final = ("planner", "coder", "critic", "cheap", "vision", "reasoner", "embed")
 
 _DEFAULT_ROLES: Final[dict[str, str]] = {
     "planner": "ollama/qwen3:8b",
     "coder": "ollama/qwen3:8b",
+    "critic": "ollama/qwen3:8b",
     "cheap": "ollama/qwen3:8b",
     "reasoner": "ollama/qwen3:8b",
 }

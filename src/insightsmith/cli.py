@@ -6,7 +6,7 @@ import dataclasses
 import json
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, NoReturn
+from typing import Annotated, Any, Final, NoReturn
 
 import typer
 from polars.exceptions import PolarsError
@@ -17,9 +17,11 @@ from rich.table import Table
 
 from insightsmith import __version__
 from insightsmith.agents.coder import Answer, CoderAgent
+from insightsmith.agents.critic import CriticAgent
 from insightsmith.agents.ideation import MAX_IDEAS, Idea, IdeationAgent
 from insightsmith.agents.viz import VizAgent
 from insightsmith.config import DEFAULT_CONFIG_PATH, load_config
+from insightsmith.critique import Critique
 from insightsmith.errors import InsightsmithError
 from insightsmith.execution.artifacts import ArtifactStore
 from insightsmith.hardware.accel import Accelerator, detect_accelerators, detect_installed_models
@@ -164,6 +166,13 @@ def ask(
             help="Give the coder Polars reference retrieved from the bundled guide.",
         ),
     ] = True,
+    critique: Annotated[
+        bool,
+        typer.Option(
+            "--critique/--no-critique",
+            help="Check the answer for statistical caveats before reporting it.",
+        ),
+    ] = True,
     chart: Annotated[
         bool, typer.Option("--chart", help="Draw the answer and save it as a figure.")
     ] = False,
@@ -189,7 +198,13 @@ def ask(
     card = build_card(result, sample)
     try:
         answer = CoderAgent(router=Router(), guide=guide).answer(
-            card, sample, question, approve=approve, on_code=_confirm if approve else None
+            card,
+            sample,
+            question,
+            approve=approve,
+            on_code=_confirm if approve else None,
+            critic=CriticAgent(router=Router()) if critique else None,
+            profile=result,
         )
     except InsightsmithError as exc:
         _fail(exc)
@@ -212,6 +227,7 @@ def ask(
                     "value": answer.value,
                     "rows": None if answer.frame is None else answer.frame.to_dicts(),
                     "attempts": len(answer.attempts),
+                    "critique": _critique_payload(answer.critique),
                 },
                 default=str,
             )
@@ -283,6 +299,48 @@ def _render_answer(answer: Answer, *, show_code: bool) -> None:
     retries = len(answer.attempts) - 1
     if retries > 0:
         console.print(f"[dim]took {retries} retry(s) after a failure[/]")
+    _render_critique(answer.critique)
+
+
+#: How each verdict reads at a glance, and the colour it wears.
+_VERDICT_STYLE: Final[dict[str, tuple[str, str]]] = {
+    "sound": ("green", "nothing to flag"),
+    "qualified": ("yellow", "read the caveats"),
+    "unsound": ("red", "do not rely on this"),
+}
+_SEVERITY_STYLE: Final[dict[str, str]] = {
+    "note": "dim",
+    "warning": "yellow",
+    "serious": "red",
+}
+
+
+def _render_critique(critique: Critique | None) -> None:
+    """Caveats are the deliverable here; an unread caveat is no caveat at all."""
+    if critique is None:
+        return
+    colour, gloss = _VERDICT_STYLE.get(critique.verdict.value, ("dim", ""))
+    console.print(
+        f"\n[{colour}]{critique.verdict.value}[/] [dim]— {gloss} "
+        f"(confidence {critique.confidence:.2f})[/]"
+    )
+    for caveat in critique.caveats:
+        style = _SEVERITY_STYLE.get(caveat.severity.value, "dim")
+        console.print(f"  [{style}]•[/] {escape(caveat.message)}")
+
+
+def _critique_payload(critique: Critique | None) -> dict[str, Any] | None:
+    if critique is None:
+        return None
+    return {
+        "verdict": critique.verdict.value,
+        "confidence": critique.confidence,
+        "answered": critique.answered,
+        "caveats": [
+            {"code": c.code, "severity": c.severity.value, "message": c.message}
+            for c in critique.caveats
+        ],
+    }
 
 
 @app.command()

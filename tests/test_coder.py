@@ -10,6 +10,7 @@ import pytest
 
 from insightsmith.agents.coder import Attempt, CoderAgent, _summarise, _tail, extract_code
 from insightsmith.config import load_config
+from insightsmith.critique import Verdict
 from insightsmith.errors import ProviderError
 from insightsmith.execution.sandbox import Limits
 from insightsmith.io.sniff import sniff
@@ -252,7 +253,7 @@ def test_the_final_failure_is_one_readable_line_not_a_traceback(tmp_path: Path, 
     assert "\n" not in message
     assert "Traceback (most recent call last)" not in message
     assert "site-packages" not in message
-    assert "Error" in message, message
+    assert "TypeError" in message, "the exception class must survive whatever follows it"
     assert "snippet.py line" in message, "the reader still needs to know where"
 
 
@@ -274,6 +275,28 @@ def test_the_full_traceback_is_still_kept_for_inspection(tmp_path: Path, data) -
     assert "Traceback (most recent call last)" in answer.attempts[0].error
 
 
+def test_the_exception_survives_context_a_library_appends_after_it() -> None:
+    """polars 1.44 adds a context stack and a hint below the exception line.
+
+    A fixed tail window cuts the class out and leaves the reader with only the
+    hint, so the summary anchors on the exception instead of counting backwards.
+    """
+    error = (
+        "Traceback (most recent call last):\n"
+        '  File "snippet.py", line 1, in <module>\n'
+        "TypeError: nested objects are not allowed\n"
+        "\n"
+        "This error occurred with the following context stack:\n"
+        "\t[1] while constructing Series 'a'\n"
+        "\n"
+        "Hint: Try setting `strict=False` to allow passing data with mixed types."
+    )
+    summary = _summarise(Attempt(code="x", ok=False, error=error))
+
+    assert summary.startswith("snippet.py line 1: TypeError: nested objects are not allowed")
+    assert "while constructing" not in summary, "indented context is still stack, not message"
+
+
 def test_a_long_traceback_is_cut_on_a_line_boundary() -> None:
     """Cutting mid-line leaves half a frame at column zero, reading as the error."""
     frames = "\n".join(
@@ -290,3 +313,96 @@ def test_a_long_traceback_is_cut_on_a_line_boundary() -> None:
 
 def test_a_single_line_longer_than_the_budget_still_comes_back() -> None:
     assert _tail("x" * 4000, 100) == "x" * 100
+
+
+def _critic_router(tmp_path: Path, *judgements: bool):
+    """A critic whose model answers each judgement in turn."""
+    from insightsmith.agents.critic import CriticAgent
+
+    verdicts = list(judgements)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "show" in str(request.url):
+            return httpx.Response(
+                200,
+                json={"capabilities": ["completion"], "model_info": {"q.context_length": 8192}},
+            )
+        answered = verdicts.pop(0) if verdicts else judgements[-1]
+        body = json.dumps(
+            {"answers_the_question": answered, "reason": "" if answered else "it totals, not rates"}
+        )
+        return httpx.Response(
+            200, json={"model": "m", "message": {"role": "assistant", "content": body}}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    _OPEN.append(client)
+    config = tmp_path / "critic.toml"
+    config.write_text('[roles]\ncritic = "ollama/test"\n', encoding="utf-8")
+    router = Router(config=load_config(config, environ={}))
+    router._providers["ollama"] = OllamaProvider(client=client)
+    return CriticAgent(router=router)
+
+
+def test_a_snippet_that_answers_the_wrong_question_is_sent_back(tmp_path: Path, data) -> None:
+    """§8's critic → retry arrow: the snippet ran, it just answered something else."""
+    card, frame = data
+    profile, _ = profile_with_sample(sniff(tmp_path / "sales.csv"))
+    agent, prompts = _agent(
+        tmp_path,
+        _code("result = float(df['revenue'].sum())"),
+        _code("result = df.group_by('region').agg(pl.col('revenue').sum())"),
+    )
+    critic = _critic_router(tmp_path, False, True)
+
+    answer = agent.answer(card, frame, "revenue per region?", critic=critic, profile=profile)
+
+    assert answer.frame is not None, "the retry's snippet should be the one kept"
+    assert len(prompts) == 2
+    assert "does not answer the question" in prompts[1]
+    assert "it totals, not rates" in prompts[1]
+    assert answer.critique is not None and answer.critique.verdict is not Verdict.UNSOUND
+
+
+def test_statistical_caveats_never_trigger_a_retry(tmp_path: Path, data) -> None:
+    """Rewriting the snippet cannot make the data less skewed, so it rides along."""
+    card, frame = data
+    profile, _ = profile_with_sample(sniff(tmp_path / "sales.csv"))
+    profile.estimated = True
+    profile.sampled_rows = 2
+    agent, prompts = _agent(tmp_path, _code("result = float(df['revenue'].sum())"))
+    critic = _critic_router(tmp_path, True)
+
+    answer = agent.answer(card, frame, "total revenue?", critic=critic, profile=profile)
+
+    assert len(prompts) == 1, "a caveat about the data is not the coder's to fix"
+    assert answer.value == 355.0
+    assert answer.critique is not None
+    assert "sampled-source" in {c.code for c in answer.critique.caveats}
+    assert answer.critique.verdict is Verdict.QUALIFIED
+
+
+def test_the_last_attempt_returns_the_answer_marked_unsound(tmp_path: Path, data) -> None:
+    """A number with a loud warning beats an exception and no number at all."""
+    card, frame = data
+    profile, _ = profile_with_sample(sniff(tmp_path / "sales.csv"))
+    agent, _ = _agent(tmp_path, _code("result = float(df['revenue'].sum())"))
+    critic = _critic_router(tmp_path, False)
+
+    answer = agent.answer(
+        card, frame, "revenue growth rate?", attempts=1, critic=critic, profile=profile
+    )
+
+    assert answer.value == 355.0
+    assert answer.critique is not None
+    assert answer.critique.verdict is Verdict.UNSOUND
+    assert answer.critique.caveats[0].code == "wrong-question"
+
+
+def test_without_a_critic_nothing_changes(tmp_path: Path, data) -> None:
+    card, frame = data
+    agent, _ = _agent(tmp_path, _code("result = float(df['revenue'].sum())"))
+    answer = agent.answer(card, frame, "total revenue?")
+
+    assert answer.value == 355.0
+    assert answer.critique is None

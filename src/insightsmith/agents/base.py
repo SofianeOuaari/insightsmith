@@ -21,13 +21,24 @@ class Agent:
     router: Router
     role: str = "planner"
 
-    def ask(self, card: DatasetCard, prompt: str, schema: dict[str, object]) -> dict[str, object]:
-        """Send the card plus a prompt, and get structured output back."""
+    def ask(
+        self, card: DatasetCard | None, prompt: str, schema: dict[str, object]
+    ) -> dict[str, object]:
+        """Send the card plus a prompt, and get structured output back.
+
+        ``card`` is optional because not every agent reasons about the data: the
+        critic asks whether a result answers a question, which needs the question
+        and the code and nothing else. Sending a card there would spend context
+        on columns the judgement does not turn on.
+        """
         from insightsmith.llm.base import Message
 
+        body = prompt
+        if card is not None:
+            body = f"Dataset card:\n{card.to_json(indent=None)}\n\n{prompt}"
         messages = [
             Message(role="system", content=self.system_prompt()),
-            Message(role="user", content=f"Dataset card:\n{card.to_json(indent=None)}\n\n{prompt}"),
+            Message(role="user", content=body),
         ]
         return self.router.structured(self.role, messages, schema=schema)
 

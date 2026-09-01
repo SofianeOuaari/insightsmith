@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.7.1] - 2026-09-01
+
+### Bug fixes
+
+- **io,profiling**: Read keyed JSON as rows, and keep the card inside its budget
+
 ## [0.7.0] - 2026-09-01
 
 ### Features

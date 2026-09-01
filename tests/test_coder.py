@@ -8,7 +8,14 @@ from pathlib import Path
 import httpx
 import pytest
 
-from insightsmith.agents.coder import Attempt, CoderAgent, _summarise, _tail, extract_code
+from insightsmith.agents.coder import (
+    Attempt,
+    CoderAgent,
+    _correction,
+    _summarise,
+    _tail,
+    extract_code,
+)
 from insightsmith.config import load_config
 from insightsmith.critique import Verdict
 from insightsmith.errors import ProviderError
@@ -440,3 +447,41 @@ def test_an_ordinary_failure_does_not_repeat_the_schema(tmp_path: Path, data) ->
     agent.answer(card, frame, "total revenue?")
 
     assert "the columns that exist" not in prompts[1]
+
+
+def test_a_numpy_style_call_is_answered_with_the_polars_form(tmp_path: Path, data) -> None:
+    """`pl.sqrt(x)` is numpy's shape; a traceback alone never says what is.
+
+    Without this the model can spend every remaining attempt rediscovering that
+    the name is wrong, having never been told what the right one looks like.
+    """
+    card, frame = data
+    agent, prompts = _agent(
+        tmp_path,
+        _code("result = pl.sqrt(df['revenue'].sum())"),
+        _code("result = float(df['revenue'].sum())"),
+    )
+
+    answer = agent.answer(card, frame, "root of total revenue?")
+
+    assert answer.value == 355.0
+    assert "there is no `pl.sqrt()`" in prompts[1]
+    # The prompt is captured as a JSON body, so its double quotes are escaped.
+    assert "every expression has `.sqrt()`" in prompts[1]
+    assert "pl.col(" in prompts[1]
+
+
+def test_a_name_with_no_expression_form_gets_no_invented_advice() -> None:
+    """The hint is checked against the installed polars, not a list kept here."""
+    assert _correction("module 'polars' has no attribute 'read_csv2'", None) == ""
+    assert _correction("module 'polars' has no attribute 'col'", None) == ""
+    assert _correction("ZeroDivisionError: division by zero", None) == ""
+
+
+def test_the_two_corrections_do_not_collide(tmp_path: Path, data) -> None:
+    """A missing column is the more specific failure, so it wins."""
+    card, _ = data
+    columns = _correction('ColumnNotFoundError: "phone" not found', card)
+
+    assert "the columns that exist are" in columns
+    assert "pl." not in columns

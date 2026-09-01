@@ -368,3 +368,33 @@ def test_caveat_prose_agrees_in_number(tmp_path: Path) -> None:
         if c.code == "correlation-outliers"
     )
     assert "alpha and beta carry outliers" in found.message
+
+
+def test_a_count_that_has_been_through_arithmetic_is_still_a_count(sales) -> None:
+    """Observed in the wild: a model divided by `n.sqrt()` and kept the name `n`.
+
+    The column then held 1.41 and 1.73 as a float, and the one check meant to
+    catch groups of two and three walked straight past it.
+    """
+    import math
+
+    profile, _ = sales
+    frame = pl.DataFrame(
+        {
+            "Type": ["a", "b", "c"],
+            "n": [1.0, math.sqrt(2), math.sqrt(3)],
+            "mean": [30.0, 77.5, 45.6],
+        }
+    )
+
+    caveats = review(question="q", code="x", profile=profile, frame=frame)
+    assert "tiny-groups" in _codes(caveats)
+
+
+def test_size_is_too_ambiguous_to_read_as_a_row_count(sales) -> None:
+    """A caveat about "fewer than 5 rows" over a column of megabytes is worse
+    than no caveat at all."""
+    profile, _ = sales
+    frame = pl.DataFrame({"file": ["a", "b"], "size": [2.3, 4.1]})
+
+    assert "tiny-groups" not in _codes(review(question="q", code="x", profile=profile, frame=frame))

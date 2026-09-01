@@ -198,7 +198,10 @@ def _tiny_groups(frame: pl.DataFrame | None) -> Caveat | None:
     if frame is None or frame.height == 0:
         return None
     for name, dtype in frame.schema.items():
-        if not dtype.is_integer() or not _is_count(name):
+        # Numeric, not integer: a count that has been through any arithmetic —
+        # a rate, a share, a square root — comes back as a float and would
+        # otherwise walk straight past the one check meant to catch it.
+        if not dtype.is_numeric() or not _is_count(name):
             continue
         small = frame.filter(pl.col(name) < MIN_GROUP_ROWS)
         if small.height == 0:
@@ -380,9 +383,15 @@ def _outlier_rate(column: ColumnProfile, profile: Profile) -> float:
 
 
 def _is_count(name: str) -> bool:
+    """Names that can only mean "how many".
+
+    "size" is deliberately absent: it means bytes or dimensions at least as
+    often as it means a row count, and a caveat that says "groups rest on fewer
+    than 5 rows" about a column of megabytes is worse than no caveat at all.
+    """
     lowered = name.lower()
-    return lowered in {"count", "n", "len", "size", "rows", "n_rows", "num"} or lowered.endswith(
-        ("_count", "_n", "_len", "_size", "_rows")
+    return lowered in {"count", "n", "len", "rows", "n_rows", "n_obs", "num"} or lowered.endswith(
+        ("_count", "_n", "_len", "_rows")
     )
 
 

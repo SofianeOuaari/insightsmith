@@ -42,6 +42,8 @@ _SUMMARY_LINES: Final = 3
 _COLUMN_MISSING = re.compile(r"ColumnNotFound|not found|unable to find column", re.I)
 #: Enough of the schema to correct a guess without spending the whole context.
 _COLUMNS_SHOWN: Final = 60
+#: `module 'polars' has no attribute 'sqrt'` — a numpy habit with a Polars answer.
+_NO_MODULE_ATTRIBUTE = re.compile(r"module '(?:polars|pl)' has no attribute '(\w+)'")
 _FENCE = re.compile(r"```(?:python)?\s*(.*?)```", re.S)
 _SNIPPET_FRAME = re.compile(r'File "snippet\.py", line (\d+)')
 _EXCEPTION = re.compile(r"^[A-Za-z_][\w.]*(?:Error|Exception|Warning|Interrupt|Exit)\b")
@@ -240,7 +242,7 @@ class CoderAgent(Agent):
         'groupby'`` — which is a far sharper query than the question was.
         """
         return self.reference_for(question, failure=_exception_lines(error)) + _retry_prompt(
-            question, code, error, _existing_columns(error, card)
+            question, code, error, _correction(error, card)
         )
 
 
@@ -344,6 +346,16 @@ def _rejected_prompt(question: str, code: str, reason: str) -> str:
     )
 
 
+def _correction(error: str, card: DatasetCard | None) -> str:
+    """What to use instead, when the failure implies a specific answer.
+
+    A traceback says what broke, never what would have worked, so a model can
+    spend every remaining attempt rediscovering the same wrong name. Two failures
+    do imply their own fix, and both are cheap to state.
+    """
+    return _existing_columns(error, card) or _expression_method(error)
+
+
 def _existing_columns(error: str, card: DatasetCard | None) -> str:
     """The real column list, but only when the model just invented one.
 
@@ -359,11 +371,30 @@ def _existing_columns(error: str, card: DatasetCard | None) -> str:
     shown = ", ".join(repr(name) for name in names[:_COLUMNS_SHOWN])
     if len(names) > _COLUMNS_SHOWN:
         shown += f", and {len(names) - _COLUMNS_SHOWN} more"
-    return shown
+    return f"the columns that exist are: {shown}"
 
 
-def _retry_prompt(question: str, code: str, error: str, columns: str = "") -> str:
-    schema = f"\n--- the columns that exist ---\n{columns}\n" if columns else ""
+def _expression_method(error: str) -> str:
+    """``pl.sqrt(x)`` is numpy's shape; in Polars the maths lives on the column.
+
+    Checked against the installed polars rather than a list kept here, so the
+    hint cannot drift from the library and is never offered for a name that
+    genuinely has no expression form.
+    """
+    match = _NO_MODULE_ATTRIBUTE.search(error)
+    if match is None:
+        return ""
+    name = match.group(1)
+    if hasattr(pl, name) or not hasattr(pl.Expr, name):
+        return ""
+    return (
+        f"there is no `pl.{name}()`, but every expression has `.{name}()` — "
+        f'write `pl.col("x").{name}()` rather than `pl.{name}(pl.col("x"))`.'
+    )
+
+
+def _retry_prompt(question: str, code: str, error: str, correction: str = "") -> str:
+    schema = f"\n--- what to use instead ---\n{correction}\n" if correction else ""
     return (
         f"Question: {question}\n\n"
         f"Your previous snippet failed.\n\n"

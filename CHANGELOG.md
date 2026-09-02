@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.7.3] - 2026-09-02
+
+### Bug fixes
+
+- **coder, critique, viz**: What a 45-question sweep turned up. Corrections now answer the pandas habits that dominated the failures, groupby, wort values, GroupBy.mean("col"). Expr namespaces. Each is probed against the installed polas so a suggestion cannot name a missing method. Double-escaped replies are repaired rather than retried three times.A breakdown answered with a single row is measured rather than asked. 'per year' against a Year column with one row cannot be answering it, and that finding overrules a model that called it sound seven times running. Numbers stored as text are flagged on the card, and folding an oversized bar chart no longer puts the string 'other' into a numeric axis. README documents all of it. Numps to 0.7.3.
+
 ## [0.7.2] - 2026-09-01
 
 ### Bug fixes

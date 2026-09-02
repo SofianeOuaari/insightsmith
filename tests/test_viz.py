@@ -354,3 +354,31 @@ def test_a_column_plotted_against_itself_is_refused_not_crashed() -> None:
     # And the renderer survives one built by hand, rather than leaking DuplicateError.
     assert ChartSpec(form=Form.SCATTER, x="v", y="v").columns == ["v"]
     assert render_png(ChartSpec(form=Form.SCATTER, x="v", y="v"), frame)
+
+
+def test_an_oversized_numeric_axis_folds_without_a_type_error() -> None:
+    """Found by sweeping real loan data: "other" is a label, the axis was Int64.
+
+    `_fold_categories` put the string "other" into a numeric column, which
+    polars refuses from several frames deep. Every earlier test used a string
+    axis, so nothing caught it.
+    """
+    frame = pl.DataFrame(
+        {"Open Account": list(range(40)), "rate": [float(40 - i) for i in range(40)]}
+    )
+    spec = ChartSpec(form=Form.BAR, x="Open Account", y="rate")
+
+    prepared = _prepare(spec, frame)
+
+    assert prepared.height == MAX_CATEGORIES
+    assert prepared["Open Account"].dtype == pl.String
+    assert prepared["Open Account"].to_list()[-1] == "other"
+    assert render_png(spec, frame)
+
+
+def test_a_numeric_axis_that_fits_keeps_its_type() -> None:
+    """The cast is for the fold; a chart that needs no fold must not be changed."""
+    frame = pl.DataFrame({"year": [2021, 2022, 2023], "v": [1.0, 2.0, 3.0]})
+    prepared = _prepare(ChartSpec(form=Form.BAR, x="year", y="v"), frame)
+
+    assert prepared["year"].dtype == pl.Int64

@@ -239,6 +239,11 @@ def _fold_categories(data: pl.DataFrame, spec: ChartSpec) -> pl.DataFrame:
     ordered = data.sort(spec.y, descending=True)
     head = ordered.head(MAX_CATEGORIES - 1)
     tail_total = ordered.tail(data.height - MAX_CATEGORIES + 1)[spec.y].sum()
+    # "other" is a label, so the axis has to hold labels. A numeric axis being
+    # folded is already categorical in everything but dtype — and putting a
+    # string into an Int64 column is a TypeError from deep inside polars.
+    if head.schema[spec.x] != pl.String:
+        head = head.with_columns(pl.col(spec.x).cast(pl.String))
     tail = pl.DataFrame({spec.x: [_OTHER], spec.y: [tail_total]}, schema=head.schema)
     return pl.concat([head, tail])
 

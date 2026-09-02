@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
@@ -367,7 +368,9 @@ def test_a_snippet_that_answers_the_wrong_question_is_sent_back(tmp_path: Path, 
     assert answer.frame is not None, "the retry's snippet should be the one kept"
     assert len(prompts) == 2
     assert "does not answer the question" in prompts[1]
-    assert "it totals, not rates" in prompts[1]
+    # "revenue per region" against a scalar is settled by arithmetic, so the
+    # measured finding supplies the reason rather than the model's wording.
+    assert "breakdown by region" in prompts[1]
     assert answer.critique is not None and answer.critique.verdict is not Verdict.UNSOUND
 
 
@@ -485,3 +488,135 @@ def test_the_two_corrections_do_not_collide(tmp_path: Path, data) -> None:
 
     assert "the columns that exist are" in columns
     assert "pl." not in columns
+
+
+def test_an_agg_alias_used_as_a_variable_is_explained(tmp_path: Path, data) -> None:
+    """The most frequent way these snippets fail, seen across many real runs.
+
+    `.agg(total=...)` names a column, not a Python variable, and the NameError
+    says nothing about which of the two the model got wrong.
+    """
+    card, frame = data
+    agent, prompts = _agent(
+        tmp_path,
+        _code(
+            "result = df.group_by('region').agg(total=pl.col('revenue').sum())"
+            ".with_columns((total * 2).alias('x'))"
+        ),
+        _code("result = float(df['revenue'].sum())"),
+    )
+
+    answer = agent.answer(card, frame, "double the totals?")
+
+    assert answer.value == 355.0
+    assert "is not a Python variable" in prompts[1]
+    assert "pl.col(" in prompts[1]
+
+
+def test_a_namespaced_method_is_pointed_at_its_namespace() -> None:
+    """Polars keeps string and date operations one level in; pandas does not."""
+    assert "`.str` namespace" in _correction(
+        "AttributeError: 'Expr' object has no attribute 'to_uppercase'", None
+    )
+    assert "`.dt` namespace" in _correction(
+        "AttributeError: 'Expr' object has no attribute 'year'", None
+    )
+
+
+def test_a_pandas_arithmetic_method_is_answered_with_the_operator() -> None:
+    correction = _correction("AttributeError: 'Expr' object has no attribute 'div'", None)
+    assert "no `.div()`" in correction
+    assert "`/`" in correction and "truediv" in correction
+
+
+def test_a_method_that_exists_nowhere_gets_no_invented_advice() -> None:
+    """Every suggestion is probed against the installed polars before it is made."""
+    assert _correction("AttributeError: 'Expr' object has no attribute 'wibble'", None) == ""
+    # `sum` is on Expr already, so the error means something else entirely.
+    assert _correction("AttributeError: 'Expr' object has no attribute 'sum'", None) == ""
+
+
+def test_arithmetic_on_a_text_column_is_answered_with_the_cast() -> None:
+    """The dtype says String and nothing in the traceback says what to do."""
+    correction = _correction(
+        "InvalidOperationError: division with 'String' datatypes is not allowed", None
+    )
+    assert "cast(pl.Float64" in correction
+    assert "numeric_text" in correction
+
+
+@pytest.mark.parametrize(
+    ("missing", "expected"),
+    [
+        ("groupby", "group_by"),
+        ("nunique", "n_unique"),
+        ("sort_values", "sort"),
+        ("fillna", "fill_null"),
+        ("merge", "join"),
+        ("astype", "cast"),
+    ],
+)
+def test_a_pandas_name_is_answered_with_the_polars_one(missing: str, expected: str) -> None:
+    """Half the failures in a 120-question sweep were pandas habits on a frame."""
+    correction = _correction(
+        f"AttributeError: 'DataFrame' object has no attribute '{missing}'", None
+    )
+    assert expected in correction, correction
+
+
+def test_a_frame_where_an_expression_belongs_is_explained() -> None:
+    assert "pl.col(" in _correction(
+        "TypeError: cannot create expression literal for value of type DataFrame", None
+    )
+
+
+def test_no_advice_is_invented_for_a_name_polars_lacks() -> None:
+    """Every suggestion is probed against the installed polars before it is made."""
+    for missing in ("wibble", "sum", "value_counts"):
+        assert (
+            _correction(f"AttributeError: 'DataFrame' object has no attribute '{missing}'", None)
+            == ""
+        ), missing
+
+
+def test_a_double_escaped_reply_is_repaired_rather_than_retried() -> None:
+    r"""Some models escape their JSON twice, so newlines arrive as a literal \n.
+
+    Python reads that as a line continuation and refuses the snippet, and every
+    retry reproduces it — three attempts spent on one quoting habit.
+    """
+    backslash_n = chr(92) + "n"
+    broken = 'result = df.filter(pl.col("a") > 1)' + backslash_n + "    .select(pl.col('b').mean())"
+
+    repaired = extract_code({"code": broken})
+
+    assert backslash_n not in repaired
+    ast.parse(repaired)  # raises if the repair did not work
+
+
+def test_statements_and_continuations_are_repaired_differently() -> None:
+    """A newline between statements; a space part-way through an expression."""
+    backslash_n = chr(92) + "n"
+    statements = extract_code({"code": "import polars as pl" + backslash_n + "result = df.head(1)"})
+    assert "\n" in statements
+    ast.parse(statements)
+
+
+def test_working_code_is_never_touched() -> None:
+    """Verifying before and after is what makes the repair safe."""
+    legit = 'result = df.select(pl.col("t").str.split("' + chr(92) + 'n"))'
+    assert extract_code({"code": legit}) == legit
+
+    plain = "result = df.height"
+    assert extract_code({"code": plain}) == plain
+
+
+def test_code_that_no_repair_fixes_is_left_alone() -> None:
+    assert extract_code({"code": "result = df.filter("}) == "result = df.filter("
+
+
+def test_pandas_groupby_shorthand_is_answered_with_agg() -> None:
+    correction = _correction(
+        "TypeError: GroupBy.mean() takes 1 positional argument but 2 were given", None
+    )
+    assert "agg" in correction and "takes no column" in correction

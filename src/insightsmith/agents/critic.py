@@ -90,7 +90,16 @@ class CriticAgent(Agent):
         """Everything that can be said about this answer, and how much survives."""
         caveats = review(question=question, code=code, profile=profile, frame=frame, value=value)
         answered, reason = self._answered(question, code, frame, value, card)
-        if answered is False:
+
+        # A measured wrong-question beats an asked one. `ungrouped-result` is the
+        # case a small model waves through most reliably — seven in one sweep,
+        # every verdict "sound" — so where arithmetic has already settled it, the
+        # model's opinion does not get to overrule the finding.
+        measured = next((c for c in caveats if c.code == "ungrouped-result"), None)
+        if measured is not None:
+            answered, reason = False, measured.message
+
+        if answered is False and measured is None:
             caveats = [
                 Caveat(
                     code="wrong-question",

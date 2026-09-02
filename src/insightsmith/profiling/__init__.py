@@ -58,6 +58,9 @@ class ColumnProfile:
     text: TextStats | None = None
     iqr_outliers: int = 0
     modified_z_outliers: int = 0
+    #: A String column whose every value parses as a number. Common in JSON and
+    #: in CSVs with thousands separators, and invisible in the dtype alone.
+    numeric_text: bool = False
 
     @property
     def name(self) -> str:
@@ -153,6 +156,21 @@ def _profile(
     return result, sample
 
 
+def _is_numeric_text(series: pl.Series) -> bool:
+    """Whether every value in a text column is really a number.
+
+    A JSON document has no types, so ``"92"`` arrives as a string and any
+    arithmetic on it fails at run time with nothing in the schema to have warned
+    anyone. Requiring *all* values to parse keeps a mostly-prose column out.
+    """
+    if series.dtype != pl.String:
+        return False
+    values = series.drop_nulls()
+    if values.is_empty():
+        return False
+    return int(values.str.strip_chars().cast(pl.Float64, strict=False).null_count()) == 0
+
+
 def _column_profile(frame: pl.DataFrame, schema: ColumnSchema, estimated: bool) -> ColumnProfile:
     series = frame[schema.name]
     height = frame.height
@@ -163,6 +181,7 @@ def _column_profile(frame: pl.DataFrame, schema: ColumnSchema, estimated: bool) 
         null_rate=nulls / height if height else 0.0,
         n_unique=series.drop_nulls().n_unique(),
         estimated=estimated,
+        numeric_text=_is_numeric_text(series),
     )
 
     if schema.semantic is SemanticType.NUMERIC:

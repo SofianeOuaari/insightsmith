@@ -10,6 +10,7 @@ The model sees the dataset card, never the data.
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
@@ -44,6 +45,60 @@ _COLUMN_MISSING = re.compile(r"ColumnNotFound|not found|unable to find column", 
 _COLUMNS_SHOWN: Final = 60
 #: `module 'polars' has no attribute 'sqrt'` — a numpy habit with a Polars answer.
 _NO_MODULE_ATTRIBUTE = re.compile(r"module '(?:polars|pl)' has no attribute '(\w+)'")
+#: `'Expr' object has no attribute 'div'` — usually a namespace or a spelling away.
+_NO_EXPR_ATTRIBUTE = re.compile(
+    r"'(Expr|Series|DataFrame|LazyFrame)' object has no attribute '(\w+)'"
+)
+#: `GroupBy.mean() takes 1 positional argument but 2 were given` — pandas shorthand.
+_GROUPBY_ARGS = re.compile(r"GroupBy\.(\w+)\(\) takes \d+ positional argument")
+#: `cannot create expression literal for value of type DataFrame` — a frame
+#: handed to a context that wanted a column.
+_FRAME_LITERAL = re.compile(r"expression literal for value of type (?:DataFrame|LazyFrame)")
+#: `division with 'String' datatypes is not allowed` — a missing cast.
+_STRING_ARITHMETIC = re.compile(r"with '(?:String|Utf8)' datatypes is not allowed")
+#: `NameError: name 'sd_sp_atk' is not defined` — an agg alias used as a variable.
+_UNDEFINED_NAME = re.compile(r"NameError: name '(\w+)' is not defined")
+#: Where Polars keeps string, date and list operations.
+_EXPR_NAMESPACES: Final = ("str", "dt", "list", "arr", "struct", "cat", "bin", "name")
+#: The object each error names, so a suggestion is probed against the right one.
+_PROBES: Final[dict[str, Any]] = {
+    "DataFrame": pl.DataFrame(),
+    "LazyFrame": pl.DataFrame().lazy(),
+    "Series": pl.Series([1]),
+}
+#: pandas spells these as methods; Polars uses the operator or the dunder name.
+_ARITHMETIC: Final[dict[str, str]] = {
+    "div": "truediv",
+    "divide": "truediv",
+    "multiply": "mul",
+    "subtract": "sub",
+    "plus": "add",
+}
+#: Names carried over from pandas that Polars simply calls something else.
+_PANDAS_HABITS: Final[dict[str, str]] = {
+    "sort_values": "sort",
+    "drop_duplicates": "unique",
+    "isnull": "is_null",
+    "isna": "is_null",
+    "notnull": "is_not_null",
+    "notna": "is_not_null",
+    "fillna": "fill_null",
+    "dropna": "drop_nulls",
+    "astype": "cast",
+    "merge": "join",
+    "apply": "map_elements",
+    "nlargest": "top_k",
+    "nsmallest": "bottom_k",
+    "query": "filter",
+    "assign": "with_columns",
+}
+_OPERATORS: Final[dict[str, str]] = {
+    "div": "/",
+    "divide": "/",
+    "multiply": "*",
+    "subtract": "-",
+    "plus": "+",
+}
 _FENCE = re.compile(r"```(?:python)?\s*(.*?)```", re.S)
 _SNIPPET_FRAME = re.compile(r'File "snippet\.py", line (\d+)')
 _EXCEPTION = re.compile(r"^[A-Za-z_][\w.]*(?:Error|Exception|Warning|Interrupt|Exit)\b")
@@ -71,6 +126,8 @@ subprocess or pathlib.
 - Assign your answer to a variable named `result`.
 - `import polars as pl` is available. Use only columns that appear in the card, \
 spelled exactly — including spaces and capitals.
+- A column marked `"numeric_text": true` holds numbers stored as text. Cast it \
+before any arithmetic: `pl.col("x").cast(pl.Float64, strict=False)`.
 - Keep it to a few lines. No printing, no plotting.
 - Reply with a single JSON object: {"code": "...", "explanation": "..."}.\
 """
@@ -251,12 +308,47 @@ def _ask_prompt(question: str) -> str:
 
 
 def extract_code(payload: dict[str, Any]) -> str:
-    """Pull the snippet out, tolerating a code fence the model was told not to use."""
+    """Pull the snippet out, tolerating how models actually reply.
+
+    Two habits, both cheap to forgive: a code fence it was told not to use, and
+    a JSON string escaped twice, so the newlines arrive as a literal backslash
+    and an ``n``. The second is fatal and silent — Python reads it as a line
+    continuation and every retry reproduces it — so it is worth repairing here.
+    """
     code = payload.get("code")
     if not isinstance(code, str):
         return ""
     fenced = _FENCE.search(code)
-    return (fenced.group(1) if fenced else code).strip()
+    return _unescape_if_broken((fenced.group(1) if fenced else code).strip())
+
+
+def _unescape_if_broken(code: str) -> str:
+    """Undo double-escaping, but only when it is what breaks the snippet.
+
+    Two readings of a literal ``\\n``, and which one is right depends on what the
+    model meant. Between statements it stands for a newline; part-way through a
+    chained expression it stands for a continuation, and a real newline there is
+    just as broken — ``.select(...)`` on its own line is not valid Python without
+    surrounding parentheses. So both are tried and whichever parses wins.
+
+    Verifying before and after is what makes this safe: working code is never
+    touched, so a snippet that genuinely splits on ``"\\n"`` keeps its escape.
+    """
+    if not code or _parses(code):
+        return code
+    for whitespace in ("\n", " "):
+        repaired = code.replace("\\n", whitespace).replace("\\t", "\t")
+        if repaired != code and _parses(repaired):
+            return repaired
+    return code
+
+
+def _parses(code: str) -> bool:
+    try:
+        ast.parse(code)
+    except (SyntaxError, ValueError):
+        return False
+    return True
 
 
 def _failure_text(outcome: SandboxResult) -> str:
@@ -353,7 +445,15 @@ def _correction(error: str, card: DatasetCard | None) -> str:
     spend every remaining attempt rediscovering the same wrong name. Two failures
     do imply their own fix, and both are cheap to state.
     """
-    return _existing_columns(error, card) or _expression_method(error)
+    return (
+        _existing_columns(error, card)
+        or _expression_method(error)
+        or _expression_attribute(error)
+        or _bare_name(error)
+        or _text_arithmetic(error)
+        or _frame_as_literal(error)
+        or _groupby_shorthand(error)
+    )
 
 
 def _existing_columns(error: str, card: DatasetCard | None) -> str:
@@ -390,6 +490,104 @@ def _expression_method(error: str) -> str:
     return (
         f"there is no `pl.{name}()`, but every expression has `.{name}()` — "
         f'write `pl.col("x").{name}()` rather than `pl.{name}(pl.col("x"))`.'
+    )
+
+
+def _expression_attribute(error: str) -> str:
+    """``.div()`` and ``.to_uppercase()`` are real, just not where pandas put them.
+
+    Polars keeps string, date and list operations behind namespaces, and the
+    arithmetic aliases under their dunder names. The traceback says only that the
+    attribute is missing, which leaves the model guessing at a name it has
+    already guessed wrong once.
+    """
+    match = _NO_EXPR_ATTRIBUTE.search(error)
+    if match is None:
+        return ""
+    owner, name = match.group(1), match.group(2)
+    probe = _PROBES.get(owner) if owner in _PROBES else pl.col("x")
+    if hasattr(probe, name):
+        return ""
+
+    # Polars usually spells it the same way with an underscore, so try that
+    # against the real object before consulting any table.
+    for split in range(1, len(name)):
+        spaced = f"{name[:split]}_{name[split:]}"
+        if hasattr(probe, spaced):
+            return f"Polars spells it `{spaced}` — write `.{spaced}()`, not `.{name}()`."
+
+    for space in _EXPR_NAMESPACES:
+        if hasattr(probe, space) and hasattr(getattr(probe, space), name):
+            return (
+                f"`.{name}()` lives on the `.{space}` namespace in Polars — "
+                f'write `pl.col("x").{space}.{name}()`.'
+            )
+
+    alias = _ARITHMETIC.get(name)
+    if alias and hasattr(probe, alias):
+        return (
+            f"Polars has no `.{name}()`; the operator `{_OPERATORS[name]}` works "
+            f"directly on expressions, or use `.{alias}()`."
+        )
+
+    # Everything else carried over from pandas, checked against the installed
+    # polars before it is offered so a suggestion cannot name a missing method.
+    equivalent = _PANDAS_HABITS.get(name)
+    if equivalent and (hasattr(probe, equivalent) or hasattr(pl.col("x"), equivalent)):
+        return f"`.{name}()` is pandas; the Polars equivalent is `.{equivalent}()`."
+    return ""
+
+
+def _bare_name(error: str) -> str:
+    """A name that is not defined is nearly always a column the model just made.
+
+    Only `df` and `pl` exist in the snippet's namespace, so an undefined name in
+    a Polars chain is an alias from an earlier `.agg()` being used as though it
+    were a Python variable — by far the most frequent way these snippets fail.
+    """
+    match = _UNDEFINED_NAME.search(error)
+    if match is None:
+        return ""
+    name = match.group(1)
+    return (
+        f"`{name}` is not a Python variable. Only `df` and `pl` exist. If it is a "
+        f'column an earlier step created, refer to it as `pl.col("{name}")`; '
+        "aliases from `.agg()` do not become names you can use directly."
+    )
+
+
+def _text_arithmetic(error: str) -> str:
+    """Numbers that arrived as text, which no dtype in the card gives away."""
+    if not _STRING_ARITHMETIC.search(error):
+        return ""
+    return (
+        "that column holds numbers stored as text, so it has to be converted "
+        'before any arithmetic: `pl.col("x").cast(pl.Float64, strict=False)`. '
+        'The card marks such columns `"numeric_text": true`.'
+    )
+
+
+def _groupby_shorthand(error: str) -> str:
+    """``group_by("a").mean("b")`` is pandas; Polars aggregates explicitly."""
+    match = _GROUPBY_ARGS.search(error)
+    if match is None:
+        return ""
+    name = match.group(1)
+    return (
+        f"`GroupBy.{name}()` takes no column in Polars — it applies to every "
+        f"column at once. Name the column in `agg` instead: "
+        f'`.group_by("k").agg(pl.col("x").{name}())`.'
+    )
+
+
+def _frame_as_literal(error: str) -> str:
+    """A whole frame handed to something that wanted one column."""
+    if not _FRAME_LITERAL.search(error):
+        return ""
+    return (
+        "a DataFrame was passed where Polars expected an expression. Inside "
+        "`select`, `filter`, `with_columns` and `agg`, refer to columns as "
+        '`pl.col("x")` rather than slicing the frame first.'
     )
 
 

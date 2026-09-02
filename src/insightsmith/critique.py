@@ -20,6 +20,7 @@ leaves the machine.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Final
@@ -52,6 +53,13 @@ NULL_RATE: Final = 0.05
 MANY_COMPARISONS: Final = 10
 #: Points needed before a line is a trend rather than two dots.
 MIN_TREND_POINTS: Final = 3
+#: Phrasings that ask for one row per something.
+_BREAKDOWN = re.compile(
+    r"\b(?:per|by|for each|for every|across|grouped by|broken down by)\s+(?:the\s+)?(.+)",
+    re.IGNORECASE,
+)
+#: How many words after the grouping word may name a column ("market size").
+_BREAKDOWN_WORDS: Final = 3
 
 
 class Severity(str, Enum):
@@ -130,6 +138,7 @@ def review(
         _multiple_comparisons(frame),
         _non_finite(frame, value),
         _short_trend(question, frame),
+        _ungrouped_result(question, profile, frame, value),
     ]
     caveats = [caveat for caveat in found if caveat is not None]
     caveats.sort(key=lambda caveat: _ORDER[caveat.severity])
@@ -338,6 +347,50 @@ def _non_finite(frame: pl.DataFrame | None, value: Any) -> Caveat | None:
                 fatal=True,
             )
     return None
+
+
+def _ungrouped_result(
+    question: str,
+    profile: Profile,
+    frame: pl.DataFrame | None,
+    value: Any,
+) -> Caveat | None:
+    """A question asking for a breakdown, answered with one number.
+
+    "average violations *per year*" against a table with a Year column wants a
+    row per year, and a single figure is a different question's answer. This is
+    the one wrong-question case that does not need a model to spot, which
+    matters: asked to judge these, a small model said "sound" every time.
+
+    The grouping word alone is not enough — "revenue per customer" is often a
+    rate, not a breakdown — so the noun after it has to name a real column.
+    """
+    if frame is not None and frame.height > 1:
+        return None
+    if frame is None and value is None:
+        return None
+
+    columns = {_normalise(column.name): column.name for column in profile.columns}
+    for match in _BREAKDOWN.finditer(question):
+        words = match.group(1).split()
+        for size in range(min(_BREAKDOWN_WORDS, len(words)), 0, -1):
+            column = columns.get(_normalise(" ".join(words[:size])))
+            if column is not None:
+                return Caveat(
+                    code="ungrouped-result",
+                    severity=Severity.SERIOUS,
+                    message=(
+                        f"the question asks for a breakdown by {column}, but the result "
+                        f"is a single row. This is one overall figure, not one per "
+                        f"{column}."
+                    ),
+                )
+    return None
+
+
+def _normalise(text: str) -> str:
+    """Fold the ways a column name and a question refer to the same thing."""
+    return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
 def _short_trend(question: str, frame: pl.DataFrame | None) -> Caveat | None:

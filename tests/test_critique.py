@@ -398,3 +398,84 @@ def test_size_is_too_ambiguous_to_read_as_a_row_count(sales) -> None:
     frame = pl.DataFrame({"file": ["a", "b"], "size": [2.3, 4.1]})
 
     assert "tiny-groups" not in _codes(review(question="q", code="x", profile=profile, frame=frame))
+
+
+# --------------------------------------------------------------------------- #
+# the wrong-question case that does not need a model
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def yearly(tmp_path: Path):
+    rows = "\n".join(f"{2015 + i % 6},firm{i % 3},{i * 2},{i}" for i in range(60))
+    return _profile(tmp_path, f"Year,Firm_Name,Compliance_Violations,High_Risk_Cases\n{rows}\n")
+
+
+def test_a_breakdown_answered_with_one_number_is_caught(yearly) -> None:
+    """Seven of these in one sweep, and the model called every verdict "sound".
+
+    "per year" against a table with a Year column wants a row per year; one
+    figure is a different question's answer.
+    """
+    profile, _ = yearly
+    caveats = review(
+        question="What is the average number of compliance violations per year?",
+        code='result = df.select(pl.col("Compliance_Violations").mean())',
+        profile=profile,
+        frame=pl.DataFrame({"avg": [12.3]}),
+    )
+
+    found = next(c for c in caveats if c.code == "ungrouped-result")
+    assert found.severity is Severity.SERIOUS
+    assert "Year" in found.message
+
+
+def test_an_actual_breakdown_is_not_flagged(yearly) -> None:
+    profile, _ = yearly
+    frame = pl.DataFrame({"Year": [2020, 2021, 2022], "avg": [1.0, 2.0, 3.0]})
+
+    caveats = review(question="violations per year?", code="x", profile=profile, frame=frame)
+    assert "ungrouped-result" not in _codes(caveats)
+
+
+def test_a_rate_is_not_mistaken_for_a_breakdown(yearly) -> None:
+    """ "per customer" is a rate when nothing called customer exists to group by."""
+    profile, _ = yearly
+    caveats = review(
+        question="What is the average revenue per customer?",
+        code="x",
+        profile=profile,
+        frame=pl.DataFrame({"avg": [12.3]}),
+    )
+    assert "ungrouped-result" not in _codes(caveats)
+
+
+def test_a_question_with_no_grouping_word_is_left_alone(yearly) -> None:
+    profile, _ = yearly
+    caveats = review(
+        question="What is the total number of violations?",
+        code="x",
+        profile=profile,
+        frame=pl.DataFrame({"total": [99.0]}),
+    )
+    assert "ungrouped-result" not in _codes(caveats)
+
+
+def test_a_measured_wrong_question_overrules_a_model_that_says_otherwise(
+    tmp_path: Path, yearly
+) -> None:
+    """Arithmetic settles it; the model's opinion does not get to overrule."""
+    profile, _ = yearly
+    agent, _ = _critic(tmp_path, _judgement(True, "looks fine to me"))
+
+    critique = agent.review(
+        question="average compliance violations per year?",
+        code='result = df.select(pl.col("Compliance_Violations").mean())',
+        profile=profile,
+        frame=pl.DataFrame({"avg": [12.3]}),
+    )
+
+    assert critique.answered is False
+    assert critique.verdict is Verdict.UNSOUND
+    assert "ungrouped-result" in {c.code for c in critique.caveats}
+    assert "wrong-question" not in {c.code for c in critique.caveats}, "no duplicate finding"

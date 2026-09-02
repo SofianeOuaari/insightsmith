@@ -12,17 +12,18 @@ An agentic data consultant that runs on your own machine.
 
 ---
 
-> ### The foundation, not yet the whole thing
+> ### What is here today
 >
-> Shipped so far: **format detection, loading and profiling** (`ismith look`),
+> **Format detection, loading and profiling** (`ismith look`),
 > **hardware probing with model-fit recommendation** (`ismith doctor`), the
 > **provider layer** routing roles to local or cloud models (`ismith models`),
 > the **dataset card plus ideation** (`ismith look --ideas`), **sandboxed code
-> execution** answering real questions (`ismith ask`), and **charts** with a
-> validated palette (`ismith ask --chart`).
+> execution** answering real questions (`ismith ask`), **charts** with a
+> validated palette (`ismith ask --chart`), and a **statistical critic** that
+> prints what is wrong with an answer before you act on it.
 >
-> Still to come across 0.7.0–0.8.0: the statistical critic and reports. Nothing
-> sends your data anywhere unless you configure a remote provider yourself.
+> Nothing sends your data anywhere unless you configure a remote provider
+> yourself.
 
 ---
 
@@ -56,6 +57,12 @@ candidate keys: menge
 
 Add `--json` for the same profile as machine-readable output.
 
+Columns holding **numbers stored as text** are marked as such. A JSON document
+carries no types, so `"92"` arrives as a string and any arithmetic on it fails
+with nothing in the schema to have warned anyone. A document keyed by record id,
+`{"Abomasnow": {...}, "Starly": {...}}`, is read as the table it is rather than
+as one row a thousand columns wide.
+
 ### Which local model fits your machine
 
 ```bash
@@ -63,15 +70,15 @@ ismith doctor
 ```
 
 Probes CPU, RAM, disk and GPU, then sizes each catalogued model against what it
-finds — **per role**, because routing and planning are different jobs and your
+finds, **per role**, because routing and planning are different jobs and your
 machine may afford one but not the other.
 
 The arithmetic is the point. Weights come from the quantisation's bytes-per-param;
 the KV cache from `2 × layers × n_kv_heads × head_dim × context × 2 bytes`. Using
 `n_kv_heads` rather than the attention-head count is what makes it right: on a
 4 GB laptop GPU at 8k context, `qwen3:8b` (8 KV heads) needs 1.21 GB of cache
-against 4.92 GB of weights, while `deepseek-coder:6.7b` — same size, but 32 KV
-heads and no grouped-query attention — needs **4.29 GB of cache against 4.20 GB
+against 4.92 GB of weights, while `deepseek-coder:6.7b` (same size, but 32 KV
+heads and no grouped-query attention) needs **4.29 GB of cache against 4.20 GB
 of weights**. A rule of thumb based on parameter count alone cannot tell you that.
 
 Models that don't fit outright get a partial-offload layer count rather than a
@@ -83,7 +90,7 @@ shrug, and anything larger than your RAM is excluded with a reason.
 ismith ask data/sales.csv "total sales by product type?"
 ```
 
-The model writes a Polars snippet, it runs, and you get the number — plus the
+The model writes a Polars snippet, it runs, and you get the number, plus the
 code that produced it, so the result is checkable rather than taken on trust.
 When the snippet fails, the traceback goes back to the model and it tries again,
 up to three times, then reports the failure honestly instead of inventing an
@@ -93,12 +100,32 @@ answer.
 more pandas than Polars, so left alone it reaches for `groupby` and
 `sort_values` and spends a retry discovering they do not exist. A Polars
 reference ships inside the package, and each question pulls the two or three
-sections that bear on it — `group_by` for an aggregation, `.over()` for a
+sections that bear on it: `group_by` for an aggregation, `.over()` for a
 per-group total, the pitfalls list for a pandas habit. On a retry the traceback
 becomes the query and outweighs the question: `no attribute 'groupby'` names the
 mistake, where the question only named the goal. The retrieval is BM25 over the
-guide's sixty-odd sections in pure stdlib — no embedding model, no second round
+guide's sixty-odd sections in pure stdlib, with no embedding model, no second round
 trip, no index to rebuild. `--no-guide` turns it off.
+
+**A failure says what to use, not only what broke.** A traceback names the
+mistake and stops there, so a model can spend every remaining attempt
+rediscovering the same wrong name. Where the failure implies its own fix, the
+retry carries it:
+
+| The snippet wrote | What comes back |
+|---|---|
+| `df.groupby(...)` | Polars spells it `group_by` |
+| `df.sort_values(...)` | the Polars equivalent is `.sort()` |
+| `pl.sqrt(x)` | there is no `pl.sqrt()`; every expression has `.sqrt()` |
+| `.group_by("k").mean("x")` | name the column in `agg` instead |
+| a column that does not exist | the columns that do |
+| arithmetic on a text column | cast it first |
+
+Every one of those is checked against the installed polars before it is offered,
+so a suggestion can never name a method the library does not have. Replies that
+arrive double-escaped, with newlines as a literal backslash and an `n`, are
+repaired rather than retried: Python reads them as a line continuation, and
+every retry would reproduce it.
 
 **The code runs in a separate process behind six layers of defence** (design doc
 §7): an allowlist AST gate that refuses `eval`, `exec`, `open`, `getattr`,
@@ -113,10 +140,10 @@ hard to trust, so each result is reviewed and the caveats printed under it:
 ```text
 0.11683640472865998
 
-qualified — read the caveats (confidence 0.70)
+qualified (confidence 0.70) · read the caveats
   • Pearson correlation assumes a linear relationship and no heavy tails, but
     avg_rating and num_published_lectures carry outliers. A few extreme rows can
-    create or hide this number entirely — check it against method="spearman".
+    create or hide this number entirely. Check it against method="spearman".
 ```
 
 Almost everything the critic knows it **measures** rather than asks: a
@@ -125,13 +152,21 @@ three described as a comparison, forty p-values with no correction, a division
 that produced an infinity, missing values the code never acknowledged, and an
 answer computed on a sampled file rather than the whole of it. Those are
 arithmetic, and asking a small model whether statistics are sound produces
-confident prose with nothing behind it — the failure this is meant to reduce,
-not to reproduce.
+confident prose with nothing behind it, which is the failure this is meant to
+reduce rather than reproduce.
 
-One judgement is genuinely not computable — did this code answer the question
-that was *asked* — and that is the only part a model is given. If it says no, the
-snippet goes back to the coder with the reason. Statistical caveats never trigger
-a retry: rewriting the snippet cannot make the data less skewed.
+It also catches the commonest way an answer goes wrong: **answering a different
+question**. Ask for compliance violations *per year* and get back one overall
+number, and that is not the answer, however correct the arithmetic. Where the
+question names a real column to group by and the result is a single row, that is
+settled by counting rather than by opinion, and the snippet goes back to the
+coder to be written properly. Asked to judge the same results, a small model
+called every one of them sound.
+
+What genuinely cannot be computed is whether a result answers a question in
+looser phrasing, and that is the only part a model is given. Statistical caveats
+never trigger a retry, because rewriting a snippet cannot make the data less
+skewed.
 
 The confidence figure is a derived index, not a probability that the answer is
 right. It falls by a fixed weight per caveat so more or worse findings always
@@ -157,16 +192,21 @@ than chosen by eye, and two of its measurements are enforced in code: slots are
 assigned in a fixed order and a ninth series raises instead of inventing a hue,
 and scatter caps at three series because all-pairs forms fail the separation
 floor at four. Bars are ranked, long tails fold into "other", and one series
-gets one hue — colouring every bar differently implies a distinction the data
-does not contain.
+gets one hue, because colouring every bar differently implies a distinction the
+data does not contain.
+
+When a result cannot be drawn, the reason says which way it cannot. A single
+correlation coefficient is a number with nothing to plot it against, which is a
+different problem from having no numeric column at all, and being told the wrong
+one sends you looking in the wrong place.
 
 Each run saves a PNG and a self-contained interactive HTML next to a manifest
 recording the question, the code and the card hash, so a figure found later can
 be traced back to the data behind it.
 
 **Read [SECURITY.md](SECURITY.md) before pointing this at anything sensitive.**
-It is defence in depth against a model erring by accident — the realistic
-failure — and explicitly *not* a security boundary against a deliberately
+It is defence in depth against a model erring by accident, which is the
+realistic failure, and explicitly *not* a security boundary against a deliberately
 malicious prompt. The resource limits are POSIX-only; on Windows the gate and
 the timeout are all there is.
 
@@ -183,20 +223,20 @@ quality flags, a correlation shortlist, and a few stratified example rows with
 obvious PII masked. Three things follow, and they are the reason for the design:
 
 - **Token cost is flat regardless of file size.** A 589 KB, 4248-row, 20-column
-  file produces a 4.8 KB card — and so would a 40 GB one. That is what makes an
+  file produces a 4.8 KB card, and so would a 40 GB one. That is what makes an
   8B local model workable.
 - **No raw records leave the machine.** Sensitive columns are redacted by name,
   recognisable values by pattern.
 - **The card hashes**, so the same data yields the same plan and results cache.
 
-Ideas come back ranked, each naming the columns it needs — and **any idea
+Ideas come back ranked, each naming the columns it needs, and **any idea
 referencing a column the card doesn't contain is discarded before you see it**.
 That one check removes most hallucination for the price of a set-membership test.
 
 ![Eight ranked analysis ideas for a sales dataset, each naming the columns it needs](https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/ideas-example.png)
 
-Every column named above — `Market`, `Product Type`, `State`, `Marketing`,
-`Total Expenses` — exists in the file. Anything else was dropped before it
+Every column named above (`Market`, `Product Type`, `State`, `Marketing`,
+`Total Expenses`) exists in the file. Anything else was dropped before it
 reached the table.
 
 The quality notes travel on the card too, so a model hedges where the data
@@ -223,9 +263,9 @@ max_usd_per_session = 0.50
 local_only = true
 ```
 
-One class covers every backend that speaks the OpenAI wire format — OpenAI,
+One class covers every backend that speaks the OpenAI wire format: OpenAI,
 OpenRouter, DeepInfra, Together, Groq, Fireworks, Mistral, Gemini's compat
-endpoint, and local vLLM / llama.cpp / LM Studio — because they differ only by
+endpoint, and local vLLM / llama.cpp / LM Studio. They differ only by
 base URL and key. Ollama is written natively instead, since `/api/show`,
 `/api/ps` and `keep_alive` are the whole reason to run locally.
 
@@ -240,8 +280,8 @@ the common case, not an edge case.
 remote provider with it set and loading the config raises, naming the offending
 role. A privacy switch that only warned would not be a privacy switch.
 
-**Format detection doesn't trust the extension.** A three-stage cascade — extension
-hint, then magic bytes, then a text-dialect probe — where each stage can veto the
+**Format detection doesn't trust the extension.** A three-stage cascade of
+extension hint, then magic bytes, then a text-dialect probe, where each stage can veto the
 one before it. A Parquet file named `.csv` is loaded as Parquet, and you're told
 the extension lied. Every result carries a confidence score and the list of
 assumptions behind it; below 80% those assumptions are printed rather than hidden.
@@ -264,7 +304,7 @@ from insightsmith import load, profile, sniff
 spec = sniff("data/sales.csv")
 print(spec.format, spec.encoding, spec.confidence, spec.warnings)
 
-frame = load(spec)  # a Polars LazyFrame — nothing read yet
+frame = load(spec)  # a Polars LazyFrame; nothing read yet
 result = profile(spec)
 print(result.summary())
 for issue in result.issues:
@@ -275,8 +315,8 @@ Polars `LazyFrame` is the internal representation throughout, so Parquet, Arrow,
 NDJSON and UTF-8 CSV are scanned rather than loaded.
 
 **Formats loadable today:** csv, tsv, xlsx/xlsm (with `[excel]`), xls, parquet,
-feather/arrow, json, jsonl/ndjson. Detected-but-not-yet-loadable formats — sqlite,
-duckdb, xml, html, ods, orc, hdf5, spss, stata, sas — say so, and name the release
+feather/arrow, json, jsonl/ndjson. Detected-but-not-yet-loadable formats (sqlite,
+duckdb, xml, html, ods, orc, hdf5, spss, stata, sas) say so, and name the release
 that will handle them.
 
 ## Install
@@ -289,7 +329,7 @@ pip install insightsmith[pandas]    # + a .to_pandas() escape hatch
 pip install insightsmith[stats]     # + scipy / statsmodels / scikit-learn
 ```
 
-The base install is six dependencies — polars, typer, rich, charset-normalizer,
+The base install is six dependencies: polars, typer, rich, charset-normalizer,
 psutil and httpx (plus a TOML backport on Python 3.10 only). No torch, no pandas,
 no agent framework. Extras stay optional on purpose.
 
@@ -304,26 +344,31 @@ Worth stating plainly, in advance:
 - **The critic reduces statistical nonsense; it does not remove it.** It checks a
   fixed list of things that are computable, so it cannot catch a confounder, a
   survivorship bias, or a question that was the wrong question to ask. A clean
-  verdict means nothing on the list fired — not that the analysis is sound.
+  verdict means nothing on the list fired, not that the analysis is sound.
+- **`--chart` often has nothing to draw.** Plenty of good questions have a single
+  number for an answer, and a correlation coefficient or an overall average
+  cannot be plotted against anything. Roughly two answers in five come back as
+  one value, and the chart is skipped with the reason given rather than a
+  meaningless figure produced.
 - **Encoding detection is a guess on small files.** Single-byte codepages are
   genuinely ambiguous in a few hundred bytes. Sparse non-ASCII text is read as
   cp1252 and the substitution is reported, but it can still be wrong.
 - **Statistics have edges.** The IQR fence is degenerate when the middle 50% of a
   column is a single value, so outliers are counted by a MAD-based modified
   z-score as well, and both numbers are shown. They disagree usefully.
-- **"Near-duplicate" means one specific thing** — identical once string columns
+- **"Near-duplicate" means one specific thing**: identical once string columns
   are trimmed and case-folded. It is not fuzzy matching.
 - **PII masking is best-effort, not a guarantee.** It catches values that look
   like contact details or identifiers and blanks columns whose names say they
   hold personal data. It cannot recognise a person's name in free text, an
   address split across columns, or an identifier in a format it hasn't seen. If
-  data must not leave the machine, set `local_only` — masking is defence in
+  data must not leave the machine, set `local_only`. Masking is defence in
   depth, not a substitute for keeping it local. `--card` shows exactly what would
   be sent, and `include_examples=False` omits sample values entirely.
 - **Dates are inferred, and `04/01/10` is genuinely ambiguous.** Date columns load
   as strings and the format is inferred afterwards, so a file polars cannot parse
   still loads. Where day-first and month-first fit equally well, the chosen format
-  is reported as a quality note rather than picked silently — check it before
+  is reported as a quality note rather than picked silently. Check it before
   trusting anything grouped by that column.
 - **Thousands separators are detected but not stripped.** polars has no option for
   them, so such columns may load as strings.
@@ -333,10 +378,10 @@ Worth stating plainly, in advance:
   tok/s from published peak memory bandwidth, which no real decode loop reaches.
   Devices missing from that table report `unknown` rather than a plausible
   substitute, and the catalog only contains models whose layer and KV-head counts
-  were read from a running Ollama — never guessed.
+  were read from a running Ollama, never guessed.
 
 - **LLMs write wrong code confidently.** `ismith ask` prints the code for exactly
-  that reason — check it. The retry loop fixes code that *crashes*; it cannot
+  that reason, so check it. The retry loop fixes code that *crashes*; it cannot
   tell that a snippet ran cleanly and answered the wrong question. The
   statistical critic that catches some of that arrives in 0.7.0.
 - **The sandbox is defence in depth, not a security boundary.** See

@@ -232,3 +232,49 @@ def test_real_phone_numbers_are_still_masked() -> None:
     for text in ("+1 (555) 123-4567", "555-123-4567", "call 07700 900123 now"):
         _, kinds = mask_text(text)
         assert kinds == {"phone"}, text
+
+
+def test_numbers_stored_as_text_are_flagged_on_the_card(tmp_path: Path) -> None:
+    """JSON has no types, so "92" arrives as a string and the dtype hides it.
+
+    Without this the card says "categorical" and the coder writes arithmetic
+    that cannot run — which is exactly how a Pokemon stats question failed.
+    """
+    path = tmp_path / "stats.json"
+    path.write_text(
+        json.dumps(
+            [
+                {"name": "Abomasnow", "attack": "92", "type": "Grass"},
+                {"name": "Starly", "attack": "30", "type": "Normal"},
+                {"name": "Charizard", "attack": "109", "type": "Fire"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result, frame = profile_with_sample(sniff(path))
+
+    card = build_card(result, frame)
+    entries = {c["name"]: c for c in card.columns}
+
+    assert entries["attack"].get("numeric_text") is True
+    assert "numeric_text" not in entries["type"], "genuine categories must stay unflagged"
+    assert "numeric_text" not in entries["name"]
+
+
+def test_a_mostly_numeric_column_with_prose_in_it_is_not_flagged(tmp_path: Path) -> None:
+    """Requiring every value to parse is what keeps "2.2 m (7 03)" out."""
+    path = tmp_path / "mixed.json"
+    path.write_text(
+        json.dumps(
+            [
+                {"label": "a", "height": "2.2 m"},
+                {"label": "b", "height": "1.4 m"},
+                {"label": "c", "height": "3"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result, frame = profile_with_sample(sniff(path))
+    entries = {c["name"]: c for c in build_card(result, frame).columns}
+
+    assert "numeric_text" not in entries["height"]

@@ -321,8 +321,8 @@ def _render_critique(critique: Critique | None) -> None:
         return
     colour, gloss = _VERDICT_STYLE.get(critique.verdict.value, ("dim", ""))
     console.print(
-        f"\n[{colour}]{critique.verdict.value}[/] [dim]— {gloss} "
-        f"(confidence {critique.confidence:.2f})[/]"
+        f"\n[{colour}]{critique.verdict.value}[/] "
+        f"[dim](confidence {critique.confidence:.2f}) · {gloss}[/]"
     )
     for caveat in critique.caveats:
         style = _SEVERITY_STYLE.get(caveat.severity.value, "dim")

@@ -156,6 +156,10 @@ def _column_entry(column: ColumnProfile) -> dict[str, Any]:
     if column.null_rate:
         entry["null_rate"] = round(column.null_rate, 3)
     entry["unique"] = column.n_unique
+    if column.numeric_text:
+        # The dtype says String and the values say otherwise. Without this the
+        # coder reads "categorical" and writes arithmetic that cannot run.
+        entry["numeric_text"] = True
 
     if column.numeric is not None:
         n = column.numeric

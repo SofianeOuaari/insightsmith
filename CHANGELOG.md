@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.8.0] - 2026-09-07
+
+### Features
+
+- **engine**: Choose between Polars and FireDucks for generated code
+
 ## [0.7.3] - 2026-09-02
 
 ### Bug fixes

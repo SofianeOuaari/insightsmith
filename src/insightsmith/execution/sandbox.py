@@ -30,6 +30,7 @@ from typing import Any, Final
 
 import polars as pl
 
+from insightsmith.engine import Engine
 from insightsmith.execution.gate import Verdict, check
 
 __all__ = ["DEFAULT_LIMITS", "Limits", "SandboxResult", "run"]
@@ -37,7 +38,10 @@ __all__ = ["DEFAULT_LIMITS", "Limits", "SandboxResult", "run"]
 #: Whether a virtual-address-space cap can be applied without breaking imports.
 _MEMORY_CAP_SUPPORTED: Final = sys.platform.startswith("linux")
 
-_RUNNER: Final = """\
+#: The child's whole program. Two versions rather than one with branches: the
+#: snippet has to meet exactly the library it was written for, and a runner that
+#: imports both would make a FireDucks failure look like a Polars one.
+_POLARS_RUNNER: Final = """\
 import json, sys, pathlib
 import polars as pl
 
@@ -79,6 +83,64 @@ else:
 
 (_dir / "result.json").write_text(json.dumps(out), encoding="utf-8")
 """
+
+_FIREDUCKS_RUNNER: Final = """\
+import json, sys, pathlib
+import fireducks.pandas as pd
+
+_dir = pathlib.Path(sys.argv[1])
+df = pd.read_parquet(_dir / "input.parquet")
+result = None
+fig = None
+
+try:
+    _src = (_dir / "snippet.py").read_text(encoding="utf-8")
+    exec(compile(_src, "snippet.py", "exec"), globals())
+except BaseException:
+    import traceback
+    (_dir / "error.txt").write_text(traceback.format_exc(), encoding="utf-8")
+    raise SystemExit(1)
+
+out = {}
+# A FireDucks frame is not a pandas frame, so duck-typing on to_pandas is what
+# catches both it and anything pandas-shaped a fallback handed back.
+_frame = None
+if hasattr(result, "to_pandas"):
+    _frame = result.to_pandas()
+elif type(result).__module__.split(".")[0] in ("pandas", "fireducks"):
+    _frame = result
+
+if _frame is not None:
+    if hasattr(_frame, "to_frame") and getattr(_frame, "ndim", 2) == 1:
+        _frame = _frame.to_frame()
+    _frame = _frame.reset_index() if _frame.index.name is not None else _frame
+    _frame.to_parquet(_dir / "result.parquet", index=False)
+    out["kind"] = "frame"
+    out["rows"] = int(len(_frame))
+    out["columns"] = [str(c) for c in _frame.columns]
+elif result is not None:
+    # A pandas reduction returns a numpy scalar, which json cannot serialise, so
+    # a correct answer would arrive as the string "np.int64(20)". Unwrap it to
+    # the Python number it already is.
+    if getattr(result, "ndim", None) == 0 and hasattr(result, "item"):
+        result = result.item()
+    try:
+        json.dumps(result)
+        out["kind"] = "value"
+        out["value"] = result
+    except TypeError:
+        out["kind"] = "repr"
+        out["value"] = repr(result)[:2000]
+else:
+    out["kind"] = "none"
+
+(_dir / "result.json").write_text(json.dumps(out), encoding="utf-8")
+"""
+
+_RUNNERS: Final[dict[Engine, str]] = {
+    Engine.POLARS: _POLARS_RUNNER,
+    Engine.FIREDUCKS: _FIREDUCKS_RUNNER,
+}
 
 
 @dataclass(slots=True, frozen=True)
@@ -149,12 +211,16 @@ def run(
     *,
     limits: Limits = DEFAULT_LIMITS,
     gate: Verdict | None = None,
+    engine: Engine = Engine.POLARS,
 ) -> SandboxResult:
     """Screen ``source``, then run it against ``frame`` in a child process.
 
     The snippet receives ``df`` and is expected to assign ``result``. It sees a
     Parquet copy of ``frame`` in a scratch directory, never the original file,
     so it cannot reach anything the caller did not hand it.
+
+    ``engine`` decides which library ``df`` arrives as. Parquet is the handover
+    either way, so the result comes back as a Polars frame whichever was used.
     """
     verdict = gate if gate is not None else check(source)
     if not verdict.allowed:
@@ -168,7 +234,7 @@ def run(
     ) as workspace:
         work = Path(workspace)
         (work / "snippet.py").write_text(source, encoding="utf-8")
-        (work / "runner.py").write_text(_RUNNER, encoding="utf-8")
+        (work / "runner.py").write_text(_RUNNERS[engine], encoding="utf-8")
         frame.write_parquet(work / "input.parquet")
 
         completed, timed_out = _spawn(work, limits)

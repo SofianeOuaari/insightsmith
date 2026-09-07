@@ -127,6 +127,53 @@ arrive double-escaped, with newlines as a literal backslash and an `n`, are
 repaired rather than retried: Python reads them as a line continuation, and
 every retry would reproduce it.
 
+**You choose which dataframe API the model writes.** Polars is the default, and
+`--engine fireducks` swaps it for [FireDucks](https://fireducks-dev.github.io/),
+which is the pandas API with a compiler underneath:
+
+```bash
+ismith ask data/sales.csv "total profit by product type" --engine fireducks
+```
+
+```python
+# --engine polars
+result = df.group_by("Product Type").agg(pl.col("Profit").sum().alias("total_profit"))
+
+# --engine fireducks
+result = df.groupby("Product Type").agg(total_profit=("Profit", "sum"))
+```
+
+The reason to offer the choice is measured rather than aesthetic. Sweeping real
+questions across several datasets, the largest single class of coder failure was
+a model reaching for pandas on a Polars frame: `groupby`, `sort_values`,
+`fillna`. Those are not slips a better prompt fixes, they are the weight of
+everything the model has read. Under FireDucks the same habits are simply
+correct.
+
+Each engine gets its own bundled guide, its own retrieval and its own
+corrections, and none of them cross over. `groupby` is a mistake in Polars and
+right in FireDucks, so the correction that catches it never reaches a FireDucks
+snippet, where it would talk the model out of working code.
+
+Only the generated code changes. Sniffing, loading and profiling stay on Polars
+`LazyFrame` whichever engine you pick, which is why profiling a 40 GB file does
+not exhaust memory, and results come back as a Polars frame either way so charts
+and the critic behave identically. Set it once with `engine = "fireducks"` in
+`~/.insightsmith/config.toml` if you would rather not pass the flag.
+
+**Which to use.** Across 80 runs on four datasets, both engines answered 37 of
+40 questions and both got 6 of 6 on questions with one known arithmetic answer.
+FireDucks was consistently faster, 13.2s against 22.3s median per question,
+because it needed far fewer retries rather than because the library is quicker.
+That result held across two independent runs.
+
+Polars remains the default anyway. FireDucks publishes no Windows wheels, and
+its failures are harder to recover from: pandas indexing is forgiving enough to
+let a model write something ambiguous that then fails further down, where a
+Polars mistake is usually a plain wrong method name the retry loop is built to
+fix. On Linux or macOS ARM, where the speed is felt, `--engine fireducks` is a
+good choice and these numbers are why.
+
 **The code runs in a separate process behind six layers of defence** (design doc
 §7): an allowlist AST gate that refuses `eval`, `exec`, `open`, `getattr`,
 dunder attributes and every import outside the analysis stack; an isolated
@@ -327,6 +374,7 @@ pip install insightsmith[excel]     # + xlsx / xls
 pip install insightsmith[viz]       # + charts (matplotlib, plotly)
 pip install insightsmith[pandas]    # + a .to_pandas() escape hatch
 pip install insightsmith[stats]     # + scipy / statsmodels / scikit-learn
+pip install insightsmith[fireducks] # + the pandas-compatible engine
 ```
 
 The base install is six dependencies: polars, typer, rich, charset-normalizer,
@@ -350,6 +398,9 @@ Worth stating plainly, in advance:
   cannot be plotted against anything. Roughly two answers in five come back as
   one value, and the chart is skipped with the reason given rather than a
   meaningless figure produced.
+- **FireDucks does not run everywhere.** It publishes wheels for Linux x86_64
+  and macOS arm64 only, so on Windows the extra installs nothing and `--engine
+  fireducks` has no engine to reach. Polars is the default for that reason.
 - **Encoding detection is a guess on small files.** Single-byte codepages are
   genuinely ambiguous in a few hundred bytes. Sparse non-ASCII text is read as
   cp1252 and the substitution is reported, but it can still be wrong.

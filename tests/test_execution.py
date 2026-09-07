@@ -13,6 +13,7 @@ import sys
 import polars as pl
 import pytest
 
+from insightsmith.engine import Engine
 from insightsmith.execution.gate import ALLOWED_IMPORTS, check
 from insightsmith.execution.sandbox import _MEMORY_CAP_SUPPORTED, Limits, run
 
@@ -272,3 +273,50 @@ def test_a_lazy_plan_that_cannot_execute_reports_the_real_error(frame: pl.DataFr
 
     assert not outcome.ok
     assert "nope" in outcome.traceback
+
+
+def test_the_engine_decides_what_df_arrives_as(frame: pl.DataFrame) -> None:
+    """A Polars snippet under the Polars runner; nothing else changes."""
+    code = "result = df.group_by('region').agg(pl.col('rev').sum())"
+    outcome = run(
+        code, frame, limits=Limits(timeout_seconds=30), gate=check(code), engine=Engine.POLARS
+    )
+
+    assert outcome.ok and outcome.kind == "frame"
+
+
+def test_a_pandas_habit_fails_under_polars(frame: pl.DataFrame) -> None:
+    """The failure the FireDucks option exists to remove."""
+    code = "result = df.groupby('region')['rev'].sum()"
+    outcome = run(
+        code, frame, limits=Limits(timeout_seconds=30), gate=check(code), engine=Engine.POLARS
+    )
+
+    assert not outcome.ok
+    assert "groupby" in outcome.traceback
+
+
+def test_fireducks_is_allowed_through_the_gate() -> None:
+    """The gate has to permit the import before the runner can use it."""
+    assert "fireducks" in ALLOWED_IMPORTS
+    assert check("import fireducks.pandas as pd\nresult = df.head(1)").allowed
+
+
+def test_a_numpy_scalar_comes_back_as_a_number(frame: pl.DataFrame) -> None:
+    """pandas reductions return numpy scalars, which json cannot serialise.
+
+    Caught by benchmarking: `df['State'].nunique()` gave the right answer and
+    the sandbox reported it as the string "np.int64(20)", because it fell past
+    the json attempt into the repr branch. Same class of bug as a LazyFrame
+    arriving as "<LazyFrame at 0x...>".
+    """
+    pytest.importorskip("fireducks")
+    code = "result = df['region'].nunique()"
+    outcome = run(
+        code, frame, limits=Limits(timeout_seconds=30), gate=check(code), engine=Engine.FIREDUCKS
+    )
+
+    assert outcome.ok
+    assert outcome.kind == "value", f"got {outcome.kind}: {outcome.value!r}"
+    assert outcome.value == 3
+    assert isinstance(outcome.value, int)

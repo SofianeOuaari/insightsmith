@@ -19,10 +19,11 @@ import polars as pl
 
 from insightsmith.agents.base import Agent
 from insightsmith.critique import Critique
+from insightsmith.engine import Engine, spec_for
 from insightsmith.errors import ProviderError
 from insightsmith.execution.gate import check
 from insightsmith.execution.sandbox import DEFAULT_LIMITS, Limits, SandboxResult, run
-from insightsmith.knowledge import CODER_EXCLUDES, DEFAULT_BUDGET, reference
+from insightsmith.knowledge import DEFAULT_BUDGET, reference
 from insightsmith.profiling import Profile
 from insightsmith.profiling.card import DatasetCard
 
@@ -49,6 +50,10 @@ _NO_MODULE_ATTRIBUTE = re.compile(r"module '(?:polars|pl)' has no attribute '(\w
 _NO_EXPR_ATTRIBUTE = re.compile(
     r"'(Expr|Series|DataFrame|LazyFrame)' object has no attribute '(\w+)'"
 )
+#: `'Expr' object is not subscriptable` — a plan indexed as though it were data.
+_EXPR_SUBSCRIPT = re.compile(r"'Expr' object is not subscriptable")
+#: pandas' own words when a tuple key reaches `__getitem__`.
+_TUPLE_SUBSCRIPT = re.compile(r"subset columns with a tuple", re.IGNORECASE)
 #: `GroupBy.mean() takes 1 positional argument but 2 were given` — pandas shorthand.
 _GROUPBY_ARGS = re.compile(r"GroupBy\.(\w+)\(\) takes \d+ positional argument")
 #: `cannot create expression literal for value of type DataFrame` — a frame
@@ -109,34 +114,48 @@ CODE_SCHEMA: Final[dict[str, Any]] = {
     "required": ["code"],
 }
 
-_SYSTEM = """\
-You write short **Polars** snippets to answer questions about a dataset you can \
-only see through its card.
+#: The API-independent half. The engine supplies the rest.
+_SYSTEM_TEMPLATE: Final = """\
+You write short {name} snippets to answer questions about a dataset you can only \
+see through its card.
 
-This is Polars, not pandas. The two APIs differ and pandas methods do not exist:
-- `df.group_by("col").agg(pl.col("x").sum())`  — not `groupby()` / `.sum()`
-- `df.filter(pl.col("x") > 1)`                 — not boolean indexing
-- `df.select(pl.col("a"), pl.col("b"))`        — not `df[["a", "b"]]`
-- `df.sort("x", descending=True)`              — not `sort_values(ascending=False)`
-- `df.with_columns((pl.col("a") / pl.col("b")).alias("ratio"))`
+{rules}
 
 Rules:
 - A DataFrame named `df` already exists. Never read a file, never import os, sys, \
 subprocess or pathlib.
 - Assign your answer to a variable named `result`.
-- `import polars as pl` is available. Use only columns that appear in the card, \
-spelled exactly — including spaces and capitals.
-- A column marked `"numeric_text": true` holds numbers stored as text. Cast it \
-before any arithmetic: `pl.col("x").cast(pl.Float64, strict=False)`.
+- `{preamble}` is available. Use only columns that appear in the card, spelled \
+exactly, including spaces and capitals.
+- A column marked `"numeric_text": true` holds numbers stored as text. Convert it \
+before any arithmetic: {cast}.
 - Keep it to a few lines. No printing, no plotting.
-- Reply with a single JSON object: {"code": "...", "explanation": "..."}.\
+- Reply with a single JSON object: {{"code": "...", "explanation": "..."}}.\
 """
+
+#: How each engine spells "make this column numeric".
+_CASTS: Final[dict[Engine, str]] = {
+    Engine.POLARS: '`pl.col("x").cast(pl.Float64, strict=False)`',
+    Engine.FIREDUCKS: '`pd.to_numeric(df["x"], errors="coerce")`',
+}
+
+
+def system_prompt_for(engine: Engine) -> str:
+    """The coder's instructions, in the dialect it is being asked to write."""
+    spec = spec_for(engine)
+    return _SYSTEM_TEMPLATE.format(
+        name=spec.label,
+        rules=spec.rules,
+        preamble=spec.preamble,
+        cast=_CASTS[engine],
+    )
+
 
 #: Framing for the retrieved excerpts. The guide is written for an analyst with a
 #: file in front of them; the coder has neither a file nor permission to open one,
 #: so the excerpts are introduced as API reference rather than as instructions.
 _REFERENCE = """\
-Polars reference — excerpts from the bundled guide, closest match first. Use them \
+{name} reference, excerpts from the bundled guide, closest match first. Use them \
 for API names and syntax only: `df` is already in memory, so ignore any file \
 reading, plotting or printing they happen to show.
 
@@ -185,9 +204,11 @@ class CoderAgent(Agent):
     #: far cheaper to prevent than to discover in a traceback.
     guide: bool = True
     guide_budget: int = DEFAULT_BUDGET
+    #: Which dataframe API the snippets are written against.
+    engine: Engine = Engine.POLARS
 
     def system_prompt(self) -> str:
-        return _SYSTEM
+        return system_prompt_for(self.engine)
 
     def reference_for(self, question: str, *, failure: str = "") -> str:
         """Guide excerpts for a question, or nothing when they are switched off.
@@ -197,8 +218,17 @@ class CoderAgent(Agent):
         """
         if not self.guide or self.guide_budget <= 0:
             return ""
-        found = reference(question, focus=failure, budget=self.guide_budget, exclude=CODER_EXCLUDES)
-        return f"{_REFERENCE.format(sections=found)}\n\n" if found else ""
+        spec = spec_for(self.engine)
+        found = reference(
+            question,
+            focus=failure,
+            budget=self.guide_budget,
+            exclude=spec.excludes,
+            guide=spec.guide,
+        )
+        if not found:
+            return ""
+        return f"{_REFERENCE.format(name=spec.label, sections=found)}\n\n"
 
     def answer(
         self,
@@ -247,7 +277,7 @@ class CoderAgent(Agent):
                 prompt = self._retry(question, code, "; ".join(verdict.reasons), card)
                 continue
 
-            outcome = run(code, frame, limits=self.limits, gate=verdict)
+            outcome = run(code, frame, limits=self.limits, gate=verdict, engine=self.engine)
             if outcome.ok and outcome.kind != "none":
                 critique = None
                 if critic is not None and profile is not None:
@@ -299,7 +329,7 @@ class CoderAgent(Agent):
         'groupby'`` — which is a far sharper query than the question was.
         """
         return self.reference_for(question, failure=_exception_lines(error)) + _retry_prompt(
-            question, code, error, _correction(error, card)
+            question, code, error, _correction(error, card, self.engine)
         )
 
 
@@ -438,17 +468,26 @@ def _rejected_prompt(question: str, code: str, reason: str) -> str:
     )
 
 
-def _correction(error: str, card: DatasetCard | None) -> str:
+def _correction(error: str, card: DatasetCard | None, engine: Engine = Engine.POLARS) -> str:
     """What to use instead, when the failure implies a specific answer.
 
     A traceback says what broke, never what would have worked, so a model can
     spend every remaining attempt rediscovering the same wrong name. Two failures
     do imply their own fix, and both are cheap to state.
     """
+    # Only the column list travels between engines. Everything else here says
+    # "that is pandas, Polars spells it differently" — advice that is not merely
+    # useless under FireDucks but actively wrong, since there `groupby` is right.
+    if engine is Engine.FIREDUCKS:
+        return (
+            _existing_columns(error, card) or _tuple_subscript(error) or _reached_for_polars(error)
+        )
     return (
         _existing_columns(error, card)
         or _expression_method(error)
         or _expression_attribute(error)
+        or _expression_on_a_frame(error)
+        or _subscripted_expression(error)
         or _bare_name(error)
         or _text_arithmetic(error)
         or _frame_as_literal(error)
@@ -536,6 +575,71 @@ def _expression_attribute(error: str) -> str:
     if equivalent and (hasattr(probe, equivalent) or hasattr(pl.col("x"), equivalent)):
         return f"`.{name}()` is pandas; the Polars equivalent is `.{equivalent}()`."
     return ""
+
+
+def _expression_on_a_frame(error: str) -> str:
+    """``df.sort_by(...)`` asks a frame for something only an expression has.
+
+    Probed rather than tabulated: the suggestion is made only when the name
+    really is an expression method in the installed polars.
+    """
+    match = _NO_EXPR_ATTRIBUTE.search(error)
+    if match is None:
+        return ""
+    owner, name = match.group(1), match.group(2)
+    probe = _PROBES.get(owner)
+    # If the object really does have it, the error is about something else and
+    # pointing at the expression form would send the reader the wrong way.
+    if owner == "Expr" or probe is None or hasattr(probe, name):
+        return ""
+    if not hasattr(pl.col("x"), name):
+        return ""
+    return (
+        f"`.{name}()` is an expression method in Polars, not a {owner} one. Use it "
+        f'inside `select`, `with_columns` or `agg` as `pl.col("x").{name}(...)`, or '
+        f"reach for the {owner}'s own method instead."
+    )
+
+
+def _subscripted_expression(error: str) -> str:
+    """``pl.col("x")[0]`` treats a plan as though it were already a list."""
+    if not _EXPR_SUBSCRIPT.search(error):
+        return ""
+    return (
+        "an expression describes a column, so it cannot be indexed. Use "
+        '`pl.col("x").first()`, `.last()` or `.gather(i)`, or collect the frame '
+        "and index that."
+    )
+
+
+def _tuple_subscript(error: str) -> str:
+    """``df["a", "b"]`` is a tuple key, which pandas reads as one label."""
+    if not _TUPLE_SUBSCRIPT.search(error):
+        return ""
+    return (
+        'selecting several columns needs an inner list: `df[["a", "b"]]`, not '
+        '`df["a", "b"]`. The second is read as a single tuple-shaped label.'
+    )
+
+
+def _reached_for_polars(error: str) -> str:
+    """The mirror of the pandas habit: Polars written where pandas was asked for.
+
+    Seen in benchmarking as ``'DataFrame' object has no attribute 'select'``
+    under FireDucks. Probed against polars rather than listed, so it fires only
+    for a name that really is one of theirs.
+    """
+    match = _NO_EXPR_ATTRIBUTE.search(error)
+    if match is None:
+        return ""
+    name = match.group(2)
+    if not hasattr(pl.DataFrame(), name) and not hasattr(pl.col("x"), name):
+        return ""
+    return (
+        f"`.{name}()` is Polars. This snippet is pandas: use `df[[...]]` to pick "
+        "columns, `df[df[...] > x]` to filter, and `df.assign(...)` or plain "
+        "assignment to add one."
+    )
 
 
 def _bare_name(error: str) -> str:

@@ -571,8 +571,14 @@ def test_a_frame_where_an_expression_belongs_is_explained() -> None:
 
 
 def test_no_advice_is_invented_for_a_name_polars_lacks() -> None:
-    """Every suggestion is probed against the installed polars before it is made."""
-    for missing in ("wibble", "sum", "value_counts"):
+    """Every suggestion is probed against the installed polars before it is made.
+
+    `sum` is on the frame already, so the error must be about something else and
+    any advice would misdirect. `value_counts` is deliberately absent from this
+    list: the frame does not have it and an expression does, which is exactly
+    the case worth pointing at.
+    """
+    for missing in ("wibble", "sum"):
         assert (
             _correction(f"AttributeError: 'DataFrame' object has no attribute '{missing}'", None)
             == ""

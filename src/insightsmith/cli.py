@@ -22,6 +22,7 @@ from insightsmith.agents.ideation import MAX_IDEAS, Idea, IdeationAgent
 from insightsmith.agents.viz import VizAgent
 from insightsmith.config import DEFAULT_CONFIG_PATH, load_config
 from insightsmith.critique import Critique
+from insightsmith.engine import Engine
 from insightsmith.errors import InsightsmithError
 from insightsmith.execution.artifacts import ArtifactStore
 from insightsmith.hardware.accel import Accelerator, detect_accelerators, detect_installed_models
@@ -173,6 +174,10 @@ def ask(
             help="Check the answer for statistical caveats before reporting it.",
         ),
     ] = True,
+    engine: Annotated[
+        Engine | None,
+        typer.Option("--engine", help="Dataframe API the generated code is written against."),
+    ] = None,
     chart: Annotated[
         bool, typer.Option("--chart", help="Draw the answer and save it as a figure.")
     ] = False,
@@ -197,7 +202,8 @@ def ask(
 
     card = build_card(result, sample)
     try:
-        answer = CoderAgent(router=Router(), guide=guide).answer(
+        chosen = engine or load_config().engine
+        answer = CoderAgent(router=Router(), guide=guide, engine=chosen).answer(
             card,
             sample,
             question,

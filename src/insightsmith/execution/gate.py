@@ -31,6 +31,7 @@ ALLOWED_IMPORTS: Final = frozenset(
         # the analysis stack §7 allows
         "polars",
         "pandas",
+        "fireducks",
         "numpy",
         "scipy",
         "sklearn",

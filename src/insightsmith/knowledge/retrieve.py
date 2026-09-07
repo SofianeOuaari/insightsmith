@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final
 
-from insightsmith.knowledge.guide import Section, sections
+from insightsmith.knowledge.guide import GUIDE_FILE, Section, sections
 
 __all__ = [
     "CODER_EXCLUDES",
@@ -134,9 +134,9 @@ class _Index:
         return total
 
 
-@lru_cache(maxsize=1)
-def _index() -> _Index:
-    corpus = [Counter(tokenize(section.searchable)) for section in sections()]
+@lru_cache(maxsize=4)
+def _index(guide: str = GUIDE_FILE) -> _Index:
+    corpus = [Counter(tokenize(section.searchable)) for section in sections(guide)]
     lengths = [sum(counts.values()) for counts in corpus]
     seen: Counter[str] = Counter()
     for counts in corpus:
@@ -157,6 +157,7 @@ def retrieve(
     focus: str = "",
     limit: int = DEFAULT_LIMIT,
     exclude: tuple[str, ...] = (),
+    guide: str = GUIDE_FILE,
 ) -> tuple[Section, ...]:
     """The sections that best match ``query``, best first.
 
@@ -166,7 +167,7 @@ def retrieve(
     nothing are left out rather than padded in: a weak match is worse than a
     longer prompt.
     """
-    index = _index()
+    index = _index(guide)
     candidates = {
         term: weight
         for term, weight in _weigh(query, focus).items()
@@ -176,7 +177,7 @@ def retrieve(
         return ()
 
     ranked: list[tuple[float, int]] = []
-    for position, section in enumerate(sections()):
+    for position, section in enumerate(sections(guide)):
         if section.number.split(".")[0] in exclude:
             continue
         score = index.score(candidates, position)
@@ -184,7 +185,8 @@ def retrieve(
             ranked.append((score, position))
     # Descending by score; document order breaks ties, so the result is stable.
     ranked.sort(key=lambda pair: (-pair[0], pair[1]))
-    return tuple(sections()[position] for _, position in ranked[:limit])
+    found = sections(guide)
+    return tuple(found[position] for _, position in ranked[:limit])
 
 
 def _weigh(query: str, focus: str) -> dict[str, float]:
@@ -203,6 +205,7 @@ def reference(
     budget: int = DEFAULT_BUDGET,
     limit: int = DEFAULT_LIMIT,
     exclude: tuple[str, ...] = (),
+    guide: str = GUIDE_FILE,
 ) -> str:
     """Rendered sections for ``query``, stopping before ``budget`` bytes.
 
@@ -213,7 +216,7 @@ def reference(
     """
     chosen: list[str] = []
     used = 0
-    for section in retrieve(query, focus=focus, limit=limit, exclude=exclude):
+    for section in retrieve(query, focus=focus, limit=limit, exclude=exclude, guide=guide):
         rendered = section.render()
         size = len(rendered.encode("utf-8"))
         if used + size <= budget:

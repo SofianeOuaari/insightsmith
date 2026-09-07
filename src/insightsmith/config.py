@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from insightsmith.engine import Engine
 from insightsmith.errors import ConfigError
 
 if sys.version_info >= (3, 11):  # pragma: no cover - trivial version shim
@@ -46,6 +47,8 @@ class Budget:
 class Config:
     roles: dict[str, str] = field(default_factory=lambda: dict(_DEFAULT_ROLES))
     budget: Budget = field(default_factory=Budget)
+    #: Which dataframe API generated code is written against.
+    engine: Engine = Engine.POLARS
     #: Extra or overriding base URLs for OpenAI-compatible backends.
     base_urls: dict[str, str] = field(default_factory=dict)
     path: Path | None = None
@@ -85,9 +88,17 @@ def load_config(path: Path | None = None, *, environ: dict[str, str] | None = No
     if env.get("INSIGHTSMITH_LOCAL_ONLY", "").lower() in {"1", "true", "yes"}:
         budget.local_only = True
 
+    raw_engine = payload.get("engine", Engine.POLARS.value)
+    try:
+        engine = Engine(str(raw_engine))
+    except ValueError as exc:
+        known = ", ".join(sorted(member.value for member in Engine))
+        raise ConfigError(f"engine must be one of {known}, got {raw_engine!r}") from exc
+
     config = Config(
         roles=roles,
         budget=budget,
+        engine=engine,
         base_urls=dict(payload.get("base_urls") or {}),
         path=target if target.is_file() else None,
     )

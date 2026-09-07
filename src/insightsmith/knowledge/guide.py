@@ -15,7 +15,7 @@ from typing import Final
 
 __all__ = ["GUIDE_FILE", "Section", "guide_text", "sections"]
 
-#: Package data, alongside this module.
+#: The guide assumed when no engine is named.
 GUIDE_FILE: Final = "polars_guide.md"
 #: ``# 8. Aggregations and group_by`` / ``## 8.3 group_by_dynamic — ...``
 _HEADING = re.compile(r"^(#{1,2}) (\d{1,2}(?:\.\d{1,2})?)\.? +(\S.*)$")
@@ -52,16 +52,14 @@ class Section:
         return len(self.render().encode("utf-8"))
 
 
-@lru_cache(maxsize=1)
-def guide_text() -> str:
-    """The raw Markdown, read once."""
-    return (
-        resources.files("insightsmith.knowledge").joinpath(GUIDE_FILE).read_text(encoding="utf-8")
-    )
+@lru_cache(maxsize=4)
+def guide_text(guide: str = GUIDE_FILE) -> str:
+    """The raw Markdown for one engine's guide, read once."""
+    return resources.files("insightsmith.knowledge").joinpath(guide).read_text(encoding="utf-8")
 
 
-@lru_cache(maxsize=1)
-def sections() -> tuple[Section, ...]:
+@lru_cache(maxsize=4)
+def sections(guide: str = GUIDE_FILE) -> tuple[Section, ...]:
     """Every section with a body, in document order.
 
     Headings that only introduce subsections carry no body of their own and are
@@ -79,7 +77,7 @@ def sections() -> tuple[Section, ...]:
             found.append(Section(number=number, title=title, body=text, parent=parent))
         body.clear()
 
-    for line in guide_text().splitlines():
+    for line in guide_text(guide).splitlines():
         if line.startswith(_FENCE):
             in_fence = not in_fence
         match = None if in_fence else _HEADING.match(line)

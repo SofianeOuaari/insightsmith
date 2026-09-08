@@ -479,3 +479,45 @@ def test_a_measured_wrong_question_overrules_a_model_that_says_otherwise(
     assert critique.verdict is Verdict.UNSOUND
     assert "ungrouped-result" in {c.code for c in critique.caveats}
     assert "wrong-question" not in {c.code for c in critique.caveats}, "no duplicate finding"
+
+
+def test_groups_with_no_spread_are_groups_of_one(sales) -> None:
+    """Seen live: three occupations had std of 0 or null and the verdict was sound.
+
+    `tiny-groups` needs a count column and a breakdown rarely carries one. A
+    standard deviation says the same thing from the other side.
+    """
+    profile, _ = sales
+    frame = pl.DataFrame(
+        {
+            "Occupation": ["Doctor", "Sales Representative", "Manager", "Engineer"],
+            "mean_quality": [6.648, 4.0, 7.0, 8.413],
+            "std_quality": [0.758, 0.0, None, 0.754],
+        }
+    )
+
+    found = next(
+        c
+        for c in review(question="q", code="x", profile=profile, frame=frame)
+        if c.code == "singleton-groups"
+    )
+    assert "2 of 4 groups" in found.message
+
+
+def test_a_healthy_spread_is_not_flagged(sales) -> None:
+    profile, _ = sales
+    frame = pl.DataFrame({"k": ["a", "b"], "std_x": [1.2, 0.9]})
+
+    assert "singleton-groups" not in _codes(
+        review(question="q", code="x", profile=profile, frame=frame)
+    )
+
+
+def test_a_column_that_is_not_a_spread_is_left_alone(sales) -> None:
+    """ "standard" in a name does not make it a standard deviation."""
+    profile, _ = sales
+    frame = pl.DataFrame({"k": ["a", "b"], "mean": [0.0, 1.0]})
+
+    assert "singleton-groups" not in _codes(
+        review(question="q", code="x", profile=profile, frame=frame)
+    )

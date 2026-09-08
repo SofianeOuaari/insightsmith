@@ -19,6 +19,7 @@ from insightsmith import __version__
 from insightsmith.agents.coder import Answer, CoderAgent
 from insightsmith.agents.critic import CriticAgent
 from insightsmith.agents.ideation import MAX_IDEAS, Idea, IdeationAgent
+from insightsmith.agents.narrator import NarratorAgent, readable
 from insightsmith.agents.viz import VizAgent
 from insightsmith.config import DEFAULT_CONFIG_PATH, load_config
 from insightsmith.critique import Critique
@@ -178,6 +179,10 @@ def ask(
         Engine | None,
         typer.Option("--engine", help="Dataframe API the generated code is written against."),
     ] = None,
+    narrate: Annotated[
+        bool,
+        typer.Option("--narrate/--no-narrate", help="Say what the result means, in words."),
+    ] = True,
     chart: Annotated[
         bool, typer.Option("--chart", help="Draw the answer and save it as a figure.")
     ] = False,
@@ -221,6 +226,14 @@ def ask(
     elif chart:
         errors.print("[yellow]nothing to chart: the answer is a single value[/]")
 
+    # §8 puts the narrator after the chart, and before either output surface, so
+    # `--json` carries the same sentence the terminal prints.
+    story = ""
+    if narrate:
+        story = NarratorAgent(router=Router()).narrate(
+            question, frame=answer.frame, value=answer.value, critique=answer.critique
+        )
+
     if as_json:
         console.print_json(
             json.dumps(
@@ -233,13 +246,14 @@ def ask(
                     "value": answer.value,
                     "rows": None if answer.frame is None else answer.frame.to_dicts(),
                     "attempts": len(answer.attempts),
+                    "narrative": story,
                     "critique": _critique_payload(answer.critique),
                 },
                 default=str,
             )
         )
         return
-    _render_answer(answer, show_code=show_code)
+    _render_answer(answer, show_code=show_code, narrative=story)
 
 
 def _draw(answer: Answer, card: Any, out: Path, *, dark: bool) -> list[str]:
@@ -284,7 +298,7 @@ def _confirm(code: str) -> bool:
     return typer.confirm("Run this?", default=False)
 
 
-def _render_answer(answer: Answer, *, show_code: bool) -> None:
+def _render_answer(answer: Answer, *, show_code: bool, narrative: str = "") -> None:
     if show_code:
         console.print(Panel(escape(answer.code), title="code", expand=False))
     if answer.explanation:
@@ -295,12 +309,16 @@ def _render_answer(answer: Answer, *, show_code: bool) -> None:
         for column in answer.frame.columns:
             table.add_column(column)
         for row in answer.frame.head(50).iter_rows():
-            table.add_row(*[str(cell) for cell in row])
+            table.add_row(*[readable(cell) for cell in row])
         console.print(table)
         if answer.frame.height > 50:
             console.print(f"[dim]showing 50 of {answer.frame.height} rows[/]")
     else:
-        console.print(f"[bold]{answer.value}[/]")
+        console.print(f"[bold]{readable(answer.value)}[/]")
+
+    if narrative:
+        console.print()
+        console.print(narrative)
 
     retries = len(answer.attempts) - 1
     if retries > 0:

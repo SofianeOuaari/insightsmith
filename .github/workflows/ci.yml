@@ -55,7 +55,16 @@ jobs:
           enable-cache: true
           python-version: ${{ matrix.python }}
 
-      - run: uv sync --all-extras
+      # Not --all-extras. FireDucks ships wheels only for manylinux x86_64 and
+      # macosx_14+ arm64, and an environment marker cannot express a minimum
+      # macOS version, so --all-extras is unresolvable on some macOS targets.
+      # Its tests skip themselves when it is absent.
+      - run: uv sync --extra excel --extra pandas --extra viz --extra stats
+
+      - name: install fireducks where it exists
+        if: matrix.os == 'ubuntu-latest'
+        run: uv pip install fireducks
+        continue-on-error: true
 
       - name: pytest
         run: uv run pytest --cov=insightsmith --cov-report=xml

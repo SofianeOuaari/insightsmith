@@ -13,6 +13,7 @@ from insightsmith.agents.coder import (
     Attempt,
     CoderAgent,
     _correction,
+    _keep_snippet_frame,
     _summarise,
     _tail,
     extract_code,
@@ -626,3 +627,40 @@ def test_pandas_groupby_shorthand_is_answered_with_agg() -> None:
         "TypeError: GroupBy.mean() takes 1 positional argument but 2 were given", None
     )
     assert "agg" in correction and "takes no column" in correction
+
+
+def test_the_snippet_frame_survives_a_traceback_too_long_to_keep() -> None:
+    """A traceback grows from the top, so the reader's own frame goes first.
+
+    Python 3.13 made tracebacks long enough for this to bite: the 1500-character
+    tail kept the exception and dropped `File "snippet.py"`, which is the one
+    line in the stack that points at code the reader can change.
+    """
+    frames = "\n".join(
+        f'  File "/very/long/path/to/site-packages/polars/module_{i}.py", line {i}, in f'
+        for i in range(60)
+    )
+    error = (
+        "Traceback (most recent call last):\n"
+        '  File "/tmp/xyz/runner.py", line 11, in <module>\n'
+        '  File "snippet.py", line 3, in <module>\n'
+        f"{frames}\n"
+        "ValueError: the real problem"
+    )
+
+    kept = _keep_snippet_frame(error, _tail(error, 1500))
+
+    assert "snippet.py" in kept
+    summary = _summarise(Attempt(code="x", ok=False, error=kept))
+    assert summary.startswith("snippet.py line 3: ValueError: the real problem")
+
+
+def test_a_frame_already_kept_is_not_duplicated() -> None:
+    error = (
+        "Traceback (most recent call last):\n"
+        '  File "snippet.py", line 1, in <module>\n'
+        "ValueError: x"
+    )
+    kept = _keep_snippet_frame(error, error)
+
+    assert kept.count("snippet.py") == 1

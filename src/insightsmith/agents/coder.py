@@ -392,7 +392,23 @@ def _failure_text(outcome: SandboxResult) -> str:
             "the snippet ran but never assigned `result` at the top level. "
             "Assign it directly, not inside a function"
         )
-    return _tail((outcome.traceback or outcome.stderr or "unknown failure").strip(), _ERROR_CHARS)
+    raw = (outcome.traceback or outcome.stderr or "unknown failure").strip()
+    return _keep_snippet_frame(raw, _tail(raw, _ERROR_CHARS))
+
+
+def _keep_snippet_frame(raw: str, kept: str) -> str:
+    """Put the reader's own frame back when truncation took it.
+
+    A traceback grows from the top, so the snippet's frame is near the start and
+    the tail is what survives a cut. Python 3.13 made tracebacks long enough for
+    the one line a reader can act on to be the first thing discarded.
+    """
+    if _SNIPPET_FRAME.search(kept):
+        return kept
+    for line in raw.splitlines():
+        if _SNIPPET_FRAME.search(line):
+            return f"{line.strip()}\n{kept}"
+    return kept
 
 
 def _tail(text: str, limit: int) -> str:

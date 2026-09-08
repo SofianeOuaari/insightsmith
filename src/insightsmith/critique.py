@@ -139,6 +139,7 @@ def review(
         _non_finite(frame, value),
         _short_trend(question, frame),
         _ungrouped_result(question, profile, frame, value),
+        _singleton_groups(frame),
     ]
     caveats = [caveat for caveat in found if caveat is not None]
     caveats.sort(key=lambda caveat: _ORDER[caveat.severity])
@@ -349,6 +350,35 @@ def _non_finite(frame: pl.DataFrame | None, value: Any) -> Caveat | None:
     return None
 
 
+def _singleton_groups(frame: pl.DataFrame | None) -> Caveat | None:
+    """A spread of zero or nothing means the group holds one row.
+
+    ``tiny-groups`` needs a count column to work from, and a breakdown rarely
+    carries one. A standard deviation does the same job from the other side:
+    polars returns null for a group of one, so the column that was meant to show
+    variation reports its absence instead, and a mean of one value is that value.
+    """
+    if frame is None or frame.height < 2:
+        return None
+    for name, dtype in frame.schema.items():
+        if not dtype.is_numeric() or not _is_spread(name):
+            continue
+        flat = frame.filter(pl.col(name).is_null() | (pl.col(name) == 0))
+        if flat.height == 0:
+            continue
+        return Caveat(
+            code="singleton-groups",
+            severity=Severity.WARNING,
+            message=(
+                f"{flat.height} of {frame.height} groups have no spread at all "
+                f"({name} is zero or missing), which means each holds a single row. "
+                "Their averages are just that one value, and cannot be compared with "
+                "groups built from many."
+            ),
+        )
+    return None
+
+
 def _ungrouped_result(
     question: str,
     profile: Profile,
@@ -445,6 +475,16 @@ def _is_count(name: str) -> bool:
     lowered = name.lower()
     return lowered in {"count", "n", "len", "rows", "n_rows", "n_obs", "num"} or lowered.endswith(
         ("_count", "_n", "_len", "_rows")
+    )
+
+
+def _is_spread(name: str) -> bool:
+    """Names that can only mean "how much does this vary"."""
+    lowered = name.lower()
+    return (
+        lowered in {"std", "stddev", "sd", "var", "variance", "stdev"}
+        or lowered.startswith(("std_", "stddev_", "sd_", "var_", "stdev_"))
+        or lowered.endswith(("_std", "_stddev", "_sd", "_var", "_variance", "_stdev"))
     )
 
 

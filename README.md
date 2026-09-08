@@ -181,6 +181,41 @@ interpreter with a scrubbed environment; CPU, memory and file-size limits;
 a Parquet copy of the data in a scratch directory rather than a path into your
 tree; and `--approve` to see each snippet before it runs.
 
+**The answer comes with a reading of it.** A column of eleven averages is
+evidence, not an answer, and leaves you to do the comparison you already asked
+for:
+
+```text
+┏━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┓
+┃ Occupation           ┃ mean_quality_sleep ┃ std_quality_sleep ┃
+┡━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━┩
+│ Engineer             │ 8.413              │ 0.754             │
+│ Sales Representative │ 4                  │ 0                 │
+└──────────────────────┴────────────────────┴───────────────────┘
+
+Engineers sleep best at 8.4 and Sales Representatives worst at 4.0, a gap of
+4.4 points. Some occupations have no variation at all, such as Salesperson and
+Sales Representative with standard deviations of zero. These groups have only
+one data point, so their mean is not representative of a broader population.
+
+qualified (confidence 0.85) · read the caveats
+  • 3 of 11 groups have no spread at all (std_quality_sleep is zero or
+    missing), which means each holds a single row.
+```
+
+It describes what is in the table and stops there. It is told never to explain
+*why*, never to speculate about cause, and to say "is associated with" rather
+than "causes", because it cannot see the study design. Any caveats the critic
+found are handed to it first, so the reading cannot call a mean typical when the
+column is known to be skewed. `--no-narrate` turns it off.
+
+This is the one agent that sees values rather than the dataset card, because it
+cannot interpret numbers it has not been shown. A result is derived data rather
+than a dataset, but that is not automatically safe: a snippet is free to assign
+`df.head(20)`, which is raw records under a different name. So the result goes
+through the same masking the card uses and the same row cap, and what reaches
+the model is what you are already looking at, no more.
+
 **Every answer is checked before you see it.** A number is easy to produce and
 hard to trust, so each result is reviewed and the caveats printed under it:
 

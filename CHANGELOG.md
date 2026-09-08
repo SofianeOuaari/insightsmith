@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.8.1] - 2026-09-08
+
+### Bug fixes
+
+- **coder,ci**: Keep the snippet frame when a traceback is truncated
+
+### Features
+
+- **narrator**: Say what the result means, and round it first
+
 ## [0.8.0] - 2026-09-07
 
 ### Features

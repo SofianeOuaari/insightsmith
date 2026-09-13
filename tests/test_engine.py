@@ -28,8 +28,8 @@ def test_every_engine_has_a_spec_and_a_guide_that_parses() -> None:
 
 
 def test_an_unknown_engine_says_what_the_choices_are() -> None:
-    with pytest.raises(ValueError, match="fireducks, polars"):
-        spec_for("pandas")
+    with pytest.raises(ValueError, match="fireducks, pandas, polars"):
+        spec_for("modin")
 
 
 def test_each_engine_is_told_to_write_its_own_api() -> None:
@@ -98,7 +98,7 @@ def test_config_defaults_to_polars(tmp_path: Path) -> None:
 
 def test_a_misspelled_engine_is_a_config_error(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
-    path.write_text('engine = "pandas"\n', encoding="utf-8")
+    path.write_text('engine = "panads"\n', encoding="utf-8")
 
     with pytest.raises(ConfigError, match="engine must be one of"):
         load_config(path, environ={})
@@ -176,3 +176,54 @@ def test_groupby_stays_silent_under_fireducks_despite_being_a_polars_name() -> N
         )
         == ""
     )
+
+
+def test_pandas_is_offered_as_its_own_engine() -> None:
+    spec = spec_for(Engine.PANDAS)
+
+    assert spec.alias == "pd"
+    assert spec.preamble == "import pandas as pd"
+    assert "fireducks" not in system_prompt_for(Engine.PANDAS).lower()
+    assert "df.groupby(" in system_prompt_for(Engine.PANDAS)
+
+
+def test_fireducks_only_chapters_never_reach_a_pandas_snippet() -> None:
+    """The guide is FireDucks', and its operational chapters are pandas verbatim.
+
+    What must not travel is everything true of FireDucks and not of pandas: lazy
+    execution, the compatibility deviations, fallback tuning, its own API
+    extensions. Those would teach a pandas snippet behaviour pandas lacks.
+    """
+    spec = spec_for(Engine.PANDAS)
+    for chapter in ("1", "3", "4", "9", "10"):
+        assert chapter in spec.excludes
+
+    hits = retrieve(
+        "lazy evaluation and forcing execution",
+        limit=8,
+        exclude=spec.excludes,
+        guide=spec.guide,
+    )
+    assert all(h.number.split(".")[0] not in spec.excludes for h in hits)
+
+
+def test_pandas_and_fireducks_share_an_api_so_share_their_advice() -> None:
+    """Both are pandas at the surface, so Polars corrections stay away from both."""
+    error = "AttributeError: 'DataFrame' object has no attribute 'groupby'"
+
+    assert _correction(error, None, Engine.PANDAS) == ""
+    assert _correction(error, None, Engine.FIREDUCKS) == ""
+    assert "group_by" in _correction(error, None, Engine.POLARS)
+
+
+def test_pandas_says_the_same_thing_about_text_columns_as_polars() -> None:
+    """pandas raises where polars returns null; it is the same missing cast.
+
+    Four of seven pandas failures on the synthetic corpus were this one error
+    on the same file, and none of them got any advice.
+    """
+    error = "TypeError: agg function failed [how->mean,dtype->object]"
+    for engine in Engine:
+        correction = _correction(error, None, engine)
+        assert "stored as text" in correction, engine
+        assert "pd.to_numeric" in correction and "cast(pl.Float64" in correction

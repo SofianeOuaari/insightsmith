@@ -114,7 +114,16 @@ if _frame is not None:
     if hasattr(_frame, "to_frame") and getattr(_frame, "ndim", 2) == 1:
         _frame = _frame.to_frame()
     _frame = _frame.reset_index() if _frame.index.name is not None else _frame
-    _frame.to_parquet(_dir / "result.parquet", index=False)
+    try:
+        _frame.to_parquet(_dir / "result.parquet", index=False)
+    except Exception:
+        # A row picked out of a frame is a Series of mixed types, and an object
+        # column holding both text and numbers has no Arrow type. Rendering
+        # those as text keeps the answer instead of losing it to the handover.
+        for _col in _frame.columns:
+            if _frame[_col].dtype == "object":
+                _frame[_col] = _frame[_col].astype(str)
+        _frame.to_parquet(_dir / "result.parquet", index=False)
     out["kind"] = "frame"
     out["rows"] = int(len(_frame))
     out["columns"] = [str(c) for c in _frame.columns]
@@ -137,8 +146,16 @@ else:
 (_dir / "result.json").write_text(json.dumps(out), encoding="utf-8")
 """
 
+#: pandas and FireDucks share a runner because they share an API. Only the
+#: import differs, and swapping it is what makes the two directly comparable:
+#: identical generated code, a different library underneath.
+_PANDAS_RUNNER: Final = _FIREDUCKS_RUNNER.replace(
+    "import fireducks.pandas as pd", "import pandas as pd"
+)
+
 _RUNNERS: Final[dict[Engine, str]] = {
     Engine.POLARS: _POLARS_RUNNER,
+    Engine.PANDAS: _PANDAS_RUNNER,
     Engine.FIREDUCKS: _FIREDUCKS_RUNNER,
 }
 

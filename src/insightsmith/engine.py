@@ -25,6 +25,7 @@ class Engine(str, Enum):
     """The dataframe API a snippet is written against."""
 
     POLARS = "polars"
+    PANDAS = "pandas"
     FIREDUCKS = "fireducks"
 
 
@@ -73,6 +74,15 @@ Two differences from pandas that matter here:
 - `isinstance(df, pandas.DataFrame)` is False. Never type-check the frame.\
 """
 
+_PANDAS_RULES: Final = """\
+This is pandas. Write ordinary pandas:
+- `df.groupby("col")["x"].sum().reset_index()`
+- `df[df["x"] > 1]`
+- `df[["a", "b"]]`
+- `df.sort_values("x", ascending=False)`
+- `df["ratio"] = df["a"] / df["b"]`\
+"""
+
 _SPECS: Final[dict[Engine, EngineSpec]] = {
     Engine.POLARS: EngineSpec(
         engine=Engine.POLARS,
@@ -83,6 +93,22 @@ _SPECS: Final[dict[Engine, EngineSpec]] = {
         alias="pl",
         preamble="import polars as pl",
         rules=_POLARS_RULES,
+    ),
+    Engine.PANDAS: EngineSpec(
+        engine=Engine.PANDAS,
+        label="pandas",
+        # The bundled guide is FireDucks', and FireDucks *is* the pandas API, so
+        # its operational chapters are pandas verbatim. What is excluded here is
+        # everything that is true of FireDucks and not of pandas: the lazy
+        # execution model, the compatibility deviations, the fallback tuning and
+        # its own API extensions. Handing those to a pandas snippet would teach
+        # it behaviour the library does not have.
+        guide="fireducks_guide.md",
+        excludes=("1", "2", "3", "4", "9", "10", "13", "14", "17"),
+        import_root="pandas",
+        alias="pd",
+        preamble="import pandas as pd",
+        rules=_PANDAS_RULES,
     ),
     Engine.FIREDUCKS: EngineSpec(
         engine=Engine.FIREDUCKS,

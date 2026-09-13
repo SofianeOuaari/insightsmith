@@ -629,10 +629,20 @@ def _quotechar(lines: list[str]) -> str:
 
 
 def _split_fields(lines: list[str], delimiter: str) -> list[str]:
-    """Data fields only — the header row would skew the numeric vote."""
+    """Data fields only — the header row would skew the numeric vote.
+
+    Split with the csv module rather than ``str.split``, because a comma
+    thousands separator only ever appears inside quotes in a comma-delimited
+    file. A naive split tears ``"44,807"`` into ``44`` and ``807``, and the
+    convention this function exists to measure is destroyed before it is read.
+    """
     out: list[str] = []
-    for line in lines[1:]:
-        out.extend(part.strip().strip('"') for part in line.split(delimiter))
+    try:
+        for row in csv.reader(lines[1:], delimiter=delimiter):
+            out.extend(part.strip() for part in row)
+    except csv.Error:  # pragma: no cover - malformed beyond the reader's tolerance
+        for line in lines[1:]:
+            out.extend(part.strip().strip('"') for part in line.split(delimiter))
     return out
 
 

@@ -36,6 +36,11 @@ from insightsmith.profiling.card import DatasetCard
 
 __all__ = ["ANSWERED_SCHEMA", "CriticAgent"]
 
+#: Findings that arithmetic settles, and that rewriting the snippet can fix. A
+#: model's opinion does not get to overrule these, and both are worth a retry:
+#: one answered a different question, the other computed nothing at all.
+_MEASURED_WRONG: Final = frozenset({"ungrouped-result", "empty-result"})
+
 ANSWERED_SCHEMA: Final[dict[str, Any]] = {
     "type": "object",
     "properties": {
@@ -95,7 +100,7 @@ class CriticAgent(Agent):
         # case a small model waves through most reliably — seven in one sweep,
         # every verdict "sound" — so where arithmetic has already settled it, the
         # model's opinion does not get to overrule the finding.
-        measured = next((c for c in caveats if c.code == "ungrouped-result"), None)
+        measured = next((c for c in caveats if c.code in _MEASURED_WRONG), None)
         if measured is not None:
             answered, reason = False, measured.message
 

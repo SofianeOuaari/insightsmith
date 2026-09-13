@@ -361,3 +361,41 @@ def test_binary_formats_ignore_the_extension(fmt: str, misleading: str, rows: in
     else:
         assert spec.format is expected[fmt]
         assert spec.confidence >= CONFIDENCE_THRESHOLD
+
+
+def test_a_quoted_thousands_separator_survives_field_splitting(tmp_path: Path) -> None:
+    """A comma thousands separator only ever appears inside quotes.
+
+    Splitting on the delimiter with `str.split` tears `"44,807"` into `44` and
+    `807`, so the convention this detection exists to measure was destroyed
+    before it could be read. Found by profiling a generated survey export.
+    """
+    path = tmp_path / "survey.csv"
+    path.write_text(
+        "respondent_id,satisfaction,household_income\n"
+        'R00000,3,"44,807"\n'
+        'R00001,5,"18,985"\n'
+        'R00002,4,"127,340"\n',
+        encoding="utf-8",
+    )
+
+    spec = sniff(path)
+
+    assert spec.dialect is not None
+    assert spec.dialect.thousands == ","
+    assert spec.dialect.decimal == "."
+
+
+def test_a_european_file_still_reads_as_european(tmp_path: Path) -> None:
+    """The fix must not turn a decimal comma into a thousands separator."""
+    path = tmp_path / "umsatz.csv"
+    path.write_text(
+        "Datum;Region;Menge;Umsatz\n17.12.2025;Nord;71;542,70\n08.11.2025;Ost;68;736,66\n",
+        encoding="cp1252",
+    )
+
+    spec = sniff(path)
+
+    assert spec.dialect is not None
+    assert spec.dialect.decimal == ","
+    assert spec.dialect.thousands is None

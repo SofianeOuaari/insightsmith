@@ -320,3 +320,49 @@ def test_a_numpy_scalar_comes_back_as_a_number(frame: pl.DataFrame) -> None:
     assert outcome.kind == "value", f"got {outcome.kind}: {outcome.value!r}"
     assert outcome.value == 3
     assert isinstance(outcome.value, int)
+
+
+def test_the_pandas_runner_hands_over_a_real_pandas_frame(frame: pl.DataFrame) -> None:
+    """Same generated code as FireDucks, a different library underneath."""
+    code = "result = df.groupby('region')['rev'].sum().reset_index()"
+    outcome = run(
+        code, frame, limits=Limits(timeout_seconds=30), gate=check(code), engine=Engine.PANDAS
+    )
+
+    assert outcome.ok and outcome.kind == "frame"
+    assert outcome.frame is not None and outcome.frame.height == 3
+
+
+def test_the_pandas_runner_unwraps_numpy_scalars_too(frame: pl.DataFrame) -> None:
+    code = "result = df['region'].nunique()"
+    outcome = run(
+        code, frame, limits=Limits(timeout_seconds=30), gate=check(code), engine=Engine.PANDAS
+    )
+
+    assert outcome.kind == "value" and outcome.value == 3
+
+
+def test_a_row_of_mixed_types_survives_the_handover(frame: pl.DataFrame) -> None:
+    """`df.loc[df['x'].idxmax()]` is a Series of text and numbers together.
+
+    That object column has no Arrow type, so the parquet handover raised and a
+    perfectly reasonable answer was lost. Rendering it as text keeps it.
+    """
+    code = "result = df.loc[df['rev'].idxmax()]"
+    outcome = run(
+        code, frame, limits=Limits(timeout_seconds=30), gate=check(code), engine=Engine.PANDAS
+    )
+
+    assert outcome.ok, outcome.traceback
+    assert outcome.kind == "frame"
+
+
+def test_an_ordinary_typed_frame_keeps_its_types(frame: pl.DataFrame) -> None:
+    """The stringify fallback must only run when the direct write fails."""
+    code = "result = df.groupby('region')['rev'].sum().reset_index()"
+    outcome = run(
+        code, frame, limits=Limits(timeout_seconds=30), gate=check(code), engine=Engine.PANDAS
+    )
+
+    assert outcome.frame is not None
+    assert outcome.frame["rev"].dtype.is_numeric()

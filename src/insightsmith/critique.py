@@ -140,6 +140,7 @@ def review(
         _short_trend(question, frame),
         _ungrouped_result(question, profile, frame, value),
         _singleton_groups(frame),
+        _empty_result(frame),
     ]
     caveats = [caveat for caveat in found if caveat is not None]
     caveats.sort(key=lambda caveat: _ORDER[caveat.severity])
@@ -348,6 +349,35 @@ def _non_finite(frame: pl.DataFrame | None, value: Any) -> Caveat | None:
                 fatal=True,
             )
     return None
+
+
+def _empty_result(frame: pl.DataFrame | None) -> Caveat | None:
+    """A column of nothing but nulls is not an answer.
+
+    Polars returns null rather than raising when an aggregate meets a type it
+    cannot reduce, so ``pl.col("wait_minutes").mean()`` over a text column
+    produces one null per group and reports success. Observed exactly that: five
+    departments, five nulls, verdict sound. Nothing downstream questioned it
+    because nothing downstream was looking.
+    """
+    if frame is None or frame.height == 0:
+        return None
+    blank = [name for name in frame.columns if frame[name].null_count() == frame.height]
+    if not blank:
+        return None
+    whole = len(blank) == frame.width
+    subject = "every column" if whole else _join(blank)
+    return Caveat(
+        code="empty-result",
+        severity=Severity.SERIOUS,
+        message=(
+            f"{subject} in the result {'is' if whole else _verb(blank, 'is', 'are')} null in "
+            f"every row. Nothing was computed. This is usually an aggregate applied to a "
+            f"column that is text rather than a number, which polars answers with null "
+            f"instead of an error."
+        ),
+        fatal=True,
+    )
 
 
 def _singleton_groups(frame: pl.DataFrame | None) -> Caveat | None:

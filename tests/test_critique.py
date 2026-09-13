@@ -521,3 +521,51 @@ def test_a_column_that_is_not_a_spread_is_left_alone(sales) -> None:
     assert "singleton-groups" not in _codes(
         review(question="q", code="x", profile=profile, frame=frame)
     )
+
+
+def test_a_result_of_nothing_but_nulls_is_not_an_answer(sales) -> None:
+    """Observed live: five departments, five nulls, verdict sound.
+
+    `pl.col("wait_minutes").mean()` over a text column returns null per group
+    rather than raising, so the snippet reports success and nothing downstream
+    questions it.
+    """
+    profile, _ = sales
+    frame = pl.DataFrame(
+        {"department": ["Cardiology", "Oncology"], "average_wait": [None, None]},
+        schema={"department": pl.String, "average_wait": pl.String},
+    )
+
+    found = next(
+        c
+        for c in review(question="q", code="x", profile=profile, frame=frame)
+        if c.code == "empty-result"
+    )
+    assert found.fatal
+    assert "average_wait" in found.message
+
+
+def test_a_partly_null_column_is_left_alone(sales) -> None:
+    """Missing values are ordinary; a column of nothing but them is not."""
+    profile, _ = sales
+    frame = pl.DataFrame({"k": ["a", "b"], "v": [1.0, None]})
+
+    assert "empty-result" not in _codes(
+        review(question="q", code="x", profile=profile, frame=frame)
+    )
+
+
+def test_an_empty_result_sends_the_snippet_back(tmp_path: Path, sales) -> None:
+    """It is the coder's to fix: the cast it forgot is what emptied the column."""
+    profile, _ = sales
+    agent, _ = _critic(tmp_path, _judgement(True, "looks fine"))
+    frame = pl.DataFrame(
+        {"department": ["A", "B"], "avg": [None, None]},
+        schema={"department": pl.String, "avg": pl.String},
+    )
+
+    critique = agent.review(question="average wait?", code="x", profile=profile, frame=frame)
+
+    assert critique.answered is False, "a model calling it sound must not stand"
+    assert critique.verdict is Verdict.UNSOUND
+    assert "empty-result" in {c.code for c in critique.caveats}

@@ -127,9 +127,10 @@ arrive double-escaped, with newlines as a literal backslash and an `n`, are
 repaired rather than retried: Python reads them as a line continuation, and
 every retry would reproduce it.
 
-**You choose which dataframe API the model writes.** Polars is the default, and
-`--engine fireducks` swaps it for [FireDucks](https://fireducks-dev.github.io/),
-which is the pandas API with a compiler underneath:
+**You choose which dataframe API the model writes.** Polars is the default;
+`--engine pandas` writes ordinary pandas, and `--engine fireducks` writes the
+same pandas against [FireDucks](https://fireducks-dev.github.io/), which is that
+API with a compiler underneath:
 
 ```bash
 ismith ask data/sales.csv "total profit by product type" --engine fireducks
@@ -139,7 +140,7 @@ ismith ask data/sales.csv "total profit by product type" --engine fireducks
 # --engine polars
 result = df.group_by("Product Type").agg(pl.col("Profit").sum().alias("total_profit"))
 
-# --engine fireducks
+# --engine pandas, and --engine fireducks, which share an API
 result = df.groupby("Product Type").agg(total_profit=("Profit", "sum"))
 ```
 
@@ -150,10 +151,12 @@ a model reaching for pandas on a Polars frame: `groupby`, `sort_values`,
 everything the model has read. Under FireDucks the same habits are simply
 correct.
 
-Each engine gets its own bundled guide, its own retrieval and its own
+Each engine gets its own guide sections, its own retrieval and its own
 corrections, and none of them cross over. `groupby` is a mistake in Polars and
-right in FireDucks, so the correction that catches it never reaches a FireDucks
-snippet, where it would talk the model out of working code.
+right in pandas, so the correction that catches it never reaches a pandas
+snippet, where it would talk the model out of working code. The pandas engine
+reads the FireDucks guide with the FireDucks-only chapters excluded, since its
+operational chapters are the pandas API verbatim.
 
 Only the generated code changes. Sniffing, loading and profiling stay on Polars
 `LazyFrame` whichever engine you pick, which is why profiling a 40 GB file does
@@ -161,18 +164,25 @@ not exhaust memory, and results come back as a Polars frame either way so charts
 and the critic behave identically. Set it once with `engine = "fireducks"` in
 `~/.insightsmith/config.toml` if you would rather not pass the flag.
 
-**Which to use.** Across 80 runs on four datasets, both engines answered 37 of
-40 questions and both got 6 of 6 on questions with one known arithmetic answer.
-FireDucks was consistently faster, 13.2s against 22.3s median per question,
-because it needed far fewer retries rather than because the library is quicker.
-That result held across two independent runs.
+**Which to use.** Measured on a synthetic corpus of nine files, 72 questions
+put to each engine, every other role held fixed:
 
-Polars remains the default anyway. FireDucks publishes no Windows wheels, and
-its failures are harder to recover from: pandas indexing is forgiving enough to
-let a model write something ambiguous that then fails further down, where a
-Polars mistake is usually a plain wrong method name the retry loop is built to
-fix. On Linux or macOS ARM, where the speed is felt, `--engine fireducks` is a
-good choice and these numbers are why.
+| engine | answered | median | p90 | charts drawn |
+|---|---|---|---|---|
+| polars | 67/72 | 50s | 76s | 64% |
+| pandas | 65/72 | 32s | 48s | 75% |
+
+The pandas engines are faster because the model writes that API more fluently,
+not because the library is. These files are small and nearly all the time is
+model round trips. Polars answers two more questions out of 72, so correctness
+is close to a tie.
+
+Polars remains the default. It is the only engine with no platform caveat,
+FireDucks publishes no Windows wheels, and a Polars mistake is usually a plain
+wrong method name that the retry loop is built to fix, where pandas indexing is
+forgiving enough to let a model write something ambiguous that fails further
+down. Where the speed is felt, `--engine pandas` is a good choice and these
+numbers are why.
 
 **The code runs in a separate process behind six layers of defence** (design doc
 §7): an allowlist AST gate that refuses `eval`, `exec`, `open`, `getattr`,

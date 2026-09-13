@@ -54,6 +54,8 @@ _NO_EXPR_ATTRIBUTE = re.compile(
 _EXPR_SUBSCRIPT = re.compile(r"'Expr' object is not subscriptable")
 #: pandas' own words when a tuple key reaches `__getitem__`.
 _TUPLE_SUBSCRIPT = re.compile(r"subset columns with a tuple", re.IGNORECASE)
+#: Both shapes of polars' complaint about `.item()` on more than one cell.
+_ITEM_MISUSE = re.compile(r"call `?\.item\(\)`?", re.IGNORECASE)
 #: `GroupBy.mean() takes 1 positional argument but 2 were given` — pandas shorthand.
 _GROUPBY_ARGS = re.compile(r"GroupBy\.(\w+)\(\) takes \d+ positional argument")
 #: `cannot create expression literal for value of type DataFrame` — a frame
@@ -61,6 +63,8 @@ _GROUPBY_ARGS = re.compile(r"GroupBy\.(\w+)\(\) takes \d+ positional argument")
 _FRAME_LITERAL = re.compile(r"expression literal for value of type (?:DataFrame|LazyFrame)")
 #: `division with 'String' datatypes is not allowed` — a missing cast.
 _STRING_ARITHMETIC = re.compile(r"with '(?:String|Utf8)' datatypes is not allowed")
+#: pandas raises where polars returns null: the same missing cast, said louder.
+_OBJECT_AGGREGATE = re.compile(r"agg function failed \[how->\w+,\s*dtype->object\]")
 #: `NameError: name 'sd_sp_atk' is not defined` — an agg alias used as a variable.
 _UNDEFINED_NAME = re.compile(r"NameError: name '(\w+)' is not defined")
 #: Where Polars keeps string, date and list operations.
@@ -136,6 +140,7 @@ before any arithmetic: {cast}.
 #: How each engine spells "make this column numeric".
 _CASTS: Final[dict[Engine, str]] = {
     Engine.POLARS: '`pl.col("x").cast(pl.Float64, strict=False)`',
+    Engine.PANDAS: '`pd.to_numeric(df["x"], errors="coerce")`',
     Engine.FIREDUCKS: '`pd.to_numeric(df["x"], errors="coerce")`',
 }
 
@@ -494,20 +499,25 @@ def _correction(error: str, card: DatasetCard | None, engine: Engine = Engine.PO
     # Only the column list travels between engines. Everything else here says
     # "that is pandas, Polars spells it differently" — advice that is not merely
     # useless under FireDucks but actively wrong, since there `groupby` is right.
-    if engine is Engine.FIREDUCKS:
+    if engine in {Engine.PANDAS, Engine.FIREDUCKS}:
         return (
-            _existing_columns(error, card) or _tuple_subscript(error) or _reached_for_polars(error)
+            _existing_columns(error, card)
+            or _text_arithmetic(error)
+            or _tuple_subscript(error)
+            or _reached_for_polars(error)
         )
     return (
         _existing_columns(error, card)
         or _expression_method(error)
         or _expression_attribute(error)
         or _expression_on_a_frame(error)
+        or _series_on_a_frame(error)
         or _subscripted_expression(error)
         or _bare_name(error)
         or _text_arithmetic(error)
         or _frame_as_literal(error)
         or _groupby_shorthand(error)
+        or _item_on_a_table(error)
     )
 
 
@@ -617,6 +627,30 @@ def _expression_on_a_frame(error: str) -> str:
     )
 
 
+def _series_on_a_frame(error: str) -> str:
+    """``df.to_list()`` asks a table for something only one column can give.
+
+    Polars splits these where pandas does not: a frame has no ``to_list``, a
+    Series does. Checked against the installed library so the advice is only
+    offered for a name a Series really has.
+    """
+    match = _NO_EXPR_ATTRIBUTE.search(error)
+    if match is None:
+        return ""
+    owner, name = match.group(1), match.group(2)
+    if owner not in {"DataFrame", "LazyFrame"}:
+        return ""
+    probe = _PROBES.get(owner)
+    if probe is None or hasattr(probe, name):
+        return ""
+    if not hasattr(pl.Series([1]), name) or hasattr(pl.col("x"), name):
+        return ""
+    return (
+        f"`.{name}()` belongs to a Series, not a whole frame. Pick the column "
+        f'first: `df["x"].{name}()`.'
+    )
+
+
 def _subscripted_expression(error: str) -> str:
     """``pl.col("x")[0]`` treats a plan as though it were already a list."""
     if not _EXPR_SUBSCRIPT.search(error):
@@ -678,11 +712,13 @@ def _bare_name(error: str) -> str:
 
 def _text_arithmetic(error: str) -> str:
     """Numbers that arrived as text, which no dtype in the card gives away."""
-    if not _STRING_ARITHMETIC.search(error):
+    if not _STRING_ARITHMETIC.search(error) and not _OBJECT_AGGREGATE.search(error):
         return ""
     return (
         "that column holds numbers stored as text, so it has to be converted "
-        'before any arithmetic: `pl.col("x").cast(pl.Float64, strict=False)`. '
+        "before any arithmetic. In Polars: "
+        '`pl.col("x").cast(pl.Float64, strict=False)`. In pandas: '
+        '`pd.to_numeric(df["x"], errors="coerce")`. '
         'The card marks such columns `"numeric_text": true`.'
     )
 
@@ -697,6 +733,23 @@ def _groupby_shorthand(error: str) -> str:
         f"`GroupBy.{name}()` takes no column in Polars — it applies to every "
         f"column at once. Name the column in `agg` instead: "
         f'`.group_by("k").agg(pl.col("x").{name}())`.'
+    )
+
+
+def _item_on_a_table(error: str) -> str:
+    """``.item()`` unwraps one cell, and a matrix is not one cell.
+
+    Seen three times across the synthetic corpus, most often after ``df.corr()``,
+    which returns a square matrix rather than the single coefficient the question
+    wanted.
+    """
+    if not _ITEM_MISUSE.search(error):
+        return ""
+    return (
+        "`.item()` only works when the result holds exactly one cell. For a "
+        'single correlation use `pl.corr("a", "b")` rather than `df.corr()`, '
+        "which returns a matrix. Otherwise leave the table as the answer, or "
+        "pick one cell with `.row(0)[0]`."
     )
 
 

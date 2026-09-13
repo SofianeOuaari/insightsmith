@@ -664,3 +664,40 @@ def test_a_frame_already_kept_is_not_duplicated() -> None:
     kept = _keep_snippet_frame(error, error)
 
     assert kept.count("snippet.py") == 1
+
+
+def test_item_on_more_than_one_cell_is_explained() -> None:
+    """Three failures across the synthetic corpus, most after `df.corr()`.
+
+    polars phrases the complaint two ways depending on how `.item()` was called,
+    and neither says what to do instead.
+    """
+    for error in (
+        "ValueError: cannot call `.item()` with only one of `row` or `column`",
+        'ValueError: can only call `.item()` without "row" or "column" values if the '
+        "DataFrame has a single element; shape=(2, 2)",
+    ):
+        correction = _correction(error, None)
+        assert "exactly one cell" in correction
+        assert "pl.corr(" in correction
+
+
+def test_an_unrelated_error_gets_no_item_advice() -> None:
+    assert _correction("ZeroDivisionError: division by zero", None) == ""
+
+
+def test_a_series_method_asked_of_a_frame_is_redirected() -> None:
+    """Polars splits these where pandas does not: `to_list` is a Series method.
+
+    Seen when ornith-1.5:9b wrote `df.to_list()`, which the expression hint
+    could not help with because an Expr has no `to_list` either.
+    """
+    correction = _correction("AttributeError: 'DataFrame' object has no attribute 'to_list'", None)
+    assert "belongs to a Series" in correction
+    assert 'df["x"].to_list()' in correction
+
+
+def test_the_expression_hint_still_wins_where_it_applies() -> None:
+    """`last` is on both a Series and an Expr, and the Expr form is the idiom."""
+    correction = _correction("AttributeError: 'DataFrame' object has no attribute 'last'", None)
+    assert "expression method" in correction

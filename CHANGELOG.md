@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.8.2] - 2026-09-13
+
+### Features
+
+- **engine**: Add pandas, and fix what a synthetic corpus found
+
 ## [0.8.1] - 2026-09-08
 
 ### Bug fixes

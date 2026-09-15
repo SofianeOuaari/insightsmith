@@ -492,20 +492,39 @@ def test_ask_fails_cleanly_when_the_model_cannot_do_it(tmp_path: Path, monkeypat
     assert "insightsmith/agents" not in result.output
 
 
-def test_models_names_the_config_path_when_there_is_none(
+def test_a_first_run_writes_the_config_rather_than_describing_it(
     tmp_path: Path, monkeypatch, stub_ollama
 ) -> None:
-    """Nothing creates the file, so the CLI has to say where it goes."""
-    from insightsmith.config import DEFAULT_CONFIG_PATH
-
+    """Telling someone where a file goes and leaving them to write it is worse
+    than writing a commented one, whose values are the defaults anyway."""
     stub_ollama({"capabilities": ["completion"], "model_info": {"q.context_length": 8192}})
-    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(tmp_path / "absent.toml"))
+    target = tmp_path / "nested" / "config.toml"
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(target))
 
     result = runner.invoke(app, ["models"])
+
+    assert result.exit_code == 0
+    assert target.exists(), "the first run should have created it"
+    assert "[roles]" in target.read_text(encoding="utf-8")
+    flat = " ".join(result.stdout.split())
+    assert "created" in flat
+    assert "none found" not in flat
+
+
+def test_a_config_that_cannot_be_written_is_not_fatal(
+    tmp_path: Path, monkeypatch, stub_ollama
+) -> None:
+    """A read-only home is a reason to fall back to defaults, not to stop."""
+    stub_ollama({"capabilities": ["completion"], "model_info": {"q.context_length": 8192}})
+    blocked = tmp_path / "file-in-the-way"
+    blocked.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(blocked / "config.toml"))
+
+    result = runner.invoke(app, ["models"])
+
     assert result.exit_code == 0
     flat = " ".join(result.stdout.split())
     assert "none found" in flat
-    assert str(DEFAULT_CONFIG_PATH.name) in flat
 
 
 def test_ask_can_be_told_to_skip_the_polars_reference() -> None:
@@ -518,3 +537,95 @@ def test_ask_can_be_told_to_skip_the_polars_reference() -> None:
     ask = get_command(app).commands["ask"]  # type: ignore[attr-defined]
     flags = {name for param in ask.params for name in (*param.opts, *param.secondary_opts)}
     assert {"--guide", "--no-guide"} <= flags
+
+
+def test_init_creates_the_config_and_says_so(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setattr("insightsmith.cli.shutil.which", lambda _: None)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "config.toml").exists()
+    assert "created" in result.stdout
+
+
+def test_init_says_how_to_install_ollama_for_this_platform(tmp_path: Path, monkeypatch) -> None:
+    """A generic docs link is the fallback, not the answer."""
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setattr("insightsmith.cli.shutil.which", lambda _: None)
+    monkeypatch.setattr("insightsmith.cli.platform.system", lambda: "Linux")
+
+    result = runner.invoke(app, ["init"])
+
+    # The warning goes to stderr and the instruction to stdout, so read both.
+    flat = " ".join(result.output.split())
+    assert "ollama.com/install.sh" in flat
+    assert "ismith init" in flat, "it has to say what to do next"
+
+
+def test_init_falls_back_to_the_docs_on_an_unknown_platform(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setattr("insightsmith.cli.shutil.which", lambda _: None)
+    monkeypatch.setattr("insightsmith.cli.platform.system", lambda: "Haiku")
+
+    result = runner.invoke(app, ["init"])
+
+    assert "ollama.com/download" in " ".join(result.stdout.split())
+
+
+def test_init_lists_what_fits_and_what_is_missing(tmp_path: Path, monkeypatch) -> None:
+    """The point of init over `ollama pull` is choosing models the machine can run."""
+    from insightsmith.hardware.probe import CpuInfo, MemoryInfo, SystemInfo
+
+    system = SystemInfo(
+        os_name="Linux",
+        os_release="6.8.0",
+        arch="x86_64",
+        cpu=CpuInfo(model="Test CPU", physical_cores=8, logical_cores=16),
+        memory=MemoryInfo(total_gb=64.0, available_gb=32.0),
+        disk_free_gb=500.0,
+    )
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setattr("insightsmith.cli.shutil.which", lambda _: "/usr/bin/ollama")
+    monkeypatch.setattr("insightsmith.cli.probe_system", lambda: system)
+    monkeypatch.setattr("insightsmith.cli.detect_accelerators", lambda _: [])
+    monkeypatch.setattr("insightsmith.cli.detect_installed_models", list)
+
+    result = runner.invoke(app, ["init", "--no-pull"])
+
+    assert result.exit_code == 0
+    flat = " ".join(result.stdout.split())
+    assert "what fits this machine" in flat
+    assert "ollama pull" in flat, "with nothing installed it must say how to fetch them"
+
+
+def test_init_pulls_nothing_without_consent(tmp_path: Path, monkeypatch) -> None:
+    """A model is gigabytes; downloading one must be asked for."""
+    from insightsmith.hardware.probe import CpuInfo, MemoryInfo, SystemInfo
+
+    system = SystemInfo(
+        os_name="Linux",
+        os_release="6.8.0",
+        arch="x86_64",
+        cpu=CpuInfo(model="Test CPU", physical_cores=8, logical_cores=16),
+        memory=MemoryInfo(total_gb=64.0, available_gb=32.0),
+        disk_free_gb=500.0,
+    )
+    pulled: list[list[str]] = []
+    monkeypatch.setenv("INSIGHTSMITH_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setattr("insightsmith.cli.shutil.which", lambda _: "/usr/bin/ollama")
+    monkeypatch.setattr("insightsmith.cli.probe_system", lambda: system)
+    monkeypatch.setattr("insightsmith.cli.detect_accelerators", lambda _: [])
+    monkeypatch.setattr("insightsmith.cli.detect_installed_models", list)
+    monkeypatch.setattr(
+        "insightsmith.cli.stream_command", lambda cmd, **_: pulled.append(list(cmd)) or True
+    )
+
+    declined = runner.invoke(app, ["init"], input="n\n")
+    assert declined.exit_code == 0
+    assert pulled == [], "declining must download nothing"
+
+    runner.invoke(app, ["init", "--yes"])
+    assert pulled, "--yes should have pulled"
+    assert all(cmd[:2] == ["ollama", "pull"] for cmd in pulled)

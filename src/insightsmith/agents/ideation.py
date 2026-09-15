@@ -37,14 +37,11 @@ IDEA_SCHEMA: Final[dict[str, Any]] = {
                     "expected_artifact": {"type": "string", "enum": list(_ARTIFACTS)},
                     "effort": {"type": "string", "enum": list(_EFFORT)},
                 },
-                "required": [
-                    "question",
-                    "rationale",
-                    "method",
-                    "columns",
-                    "expected_artifact",
-                    "effort",
-                ],
+                # Only what validation actually enforces. The rest is welcome
+                # and every capable model fills it in, but demanding six fields
+                # from a 0.8B model buys nothing: it answers with fewer, or with
+                # nothing at all, and a good idea is lost over its envelope.
+                "required": ["question", "columns"],
             },
         }
     },
@@ -152,11 +149,11 @@ def validate_ideas(
     for item in raw:
         if not isinstance(item, dict):
             continue
-        question = str(item.get("question") or "").strip()
+        question = _field(item, "question", "title", "name", "analysis")
         if not question:
             continue
 
-        columns = [str(c) for c in _as_list(item.get("columns"))]
+        columns = [str(c) for c in _as_list(item.get("columns") or item.get("fields"))]
         # The check that earns its keep: an invented column disqualifies the idea.
         if not columns or any(column not in known for column in columns):
             continue
@@ -164,8 +161,8 @@ def validate_ideas(
         out.append(
             Idea(
                 question=question,
-                rationale=str(item.get("rationale") or "").strip(),
-                method=str(item.get("method") or "").strip(),
+                rationale=_field(item, "rationale", "reasoning", "why"),
+                method=_field(item, "method", "approach", "how"),
                 columns=columns,
                 expected_artifact=_one_of(item.get("expected_artifact"), _ARTIFACTS, "table"),
                 effort=_one_of(item.get("effort"), _EFFORT, "medium"),
@@ -175,6 +172,21 @@ def validate_ideas(
         if len(out) >= limit:
             break
     return out
+
+
+def _field(item: dict[str, Any], *names: str) -> str:
+    """The first of several spellings a model might have used.
+
+    Small models rename the fields they were given: ``name`` for ``question``,
+    ``reasoning`` for ``rationale``. The schema asks for one spelling and the
+    validator accepts the obvious synonyms, because discarding a usable idea
+    over its key is a worse failure than reading it.
+    """
+    for name in names:
+        value = item.get(name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def unknown_columns(payload: dict[str, Any] | list[Any], card: DatasetCard) -> list[str]:

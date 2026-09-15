@@ -27,6 +27,7 @@ __all__ = [
     "parse_system_profiler_cpu",
     "probe_system",
     "run_command",
+    "stream_command",
 ]
 
 _BYTES_PER_GB: Final = 1e9
@@ -60,6 +61,28 @@ class SystemInfo:
     @property
     def is_apple_silicon(self) -> bool:
         return self.os_name == "Darwin" and self.arch in {"arm64", "aarch64"}
+
+
+def stream_command(cmd: Sequence[str], *, timeout: float) -> bool:
+    """Run a binary and let its output reach the terminal, returning success.
+
+    The one place output is not captured. Pulling a model is minutes of download
+    with a progress bar, and swallowing that leaves a reader watching a frozen
+    prompt with no way to tell a slow network from a hang. The safety that
+    matters is unchanged: a fixed argument list, never a shell string, always a
+    timeout, and a missing binary is a soft failure.
+    """
+    if not cmd or shutil.which(cmd[0]) is None:
+        return False
+    try:
+        completed = subprocess.run(  # noqa: S603 - fixed argv, never a shell string
+            list(cmd),
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
 
 
 def run_command(cmd: Sequence[str], *, timeout: float = _COMMAND_TIMEOUT) -> str | None:

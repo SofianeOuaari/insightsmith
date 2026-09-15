@@ -108,6 +108,14 @@ _OPERATORS: Final[dict[str, str]] = {
     "subtract": "-",
     "plus": "+",
 }
+#: Said to a model that answered with a title instead of a program. Small
+#: models do this constantly, and "not valid Python" does not tell them why.
+_NOT_CODE: Final = (
+    "the reply was a description, not runnable code. The `code` field must "
+    "contain Python that assigns to `result`, for example: "
+    '`result = df.group_by("region").agg(pl.col("revenue").sum())`. '
+    "Do not put the title of the analysis there."
+)
 _FENCE = re.compile(r"```(?:python)?\s*(.*?)```", re.S)
 _SNIPPET_FRAME = re.compile(r'File "snippet\.py", line (\d+)')
 _EXCEPTION = re.compile(r"^[A-Za-z_][\w.]*(?:Error|Exception|Warning|Interrupt|Exit)\b")
@@ -268,9 +276,9 @@ class CoderAgent(Agent):
             payload = self.ask(card, prompt, CODE_SCHEMA)
             code = extract_code(payload)
             explanation = str(payload.get("explanation") or "").strip()
-            if not code:
-                prompt = self._retry(question, "", "the reply contained no code", card)
-                history.append(Attempt(code="", ok=False, error="no code in the reply"))
+            if not code or not _looks_like_an_answer(code):
+                prompt = self._retry(question, code, _NOT_CODE, card)
+                history.append(Attempt(code=code, ok=False, error=_NOT_CODE))
                 continue
 
             if approve and on_code is not None and on_code(code) is False:
@@ -324,7 +332,27 @@ class CoderAgent(Agent):
             raise ProviderError("no attempt was made")
         raise ProviderError(
             f"could not answer after {len(history)} attempt(s). "
-            f"Last failure: {_summarise(history[-1])}"
+            f"Last failure: {_summarise(history[-1])}{self._capability_hint(history)}"
+        )
+
+    def _capability_hint(self, history: list[Attempt]) -> str:
+        """Name the likely cause when a model never produced code at all.
+
+        A model that writes bad Polars is what the retry loop is for. A model
+        that answers ``{"code": "SUCCESS"}`` every time is not making a mistake,
+        it is too small to hold the contract, and saying "not valid Python" three
+        times leaves the reader tuning a prompt that was never the problem.
+        """
+        if not history or not all(a.error == _NOT_CODE for a in history):
+            return ""
+        try:
+            model = self.router.route(self.role).model
+        except Exception:  # pragma: no cover - naming the model is a courtesy
+            model = f"the {self.role} model"
+        return (
+            f" {model} never returned runnable code, only descriptions of it. "
+            "Models this small rarely hold a JSON-plus-code contract; "
+            "`ismith doctor` shows which ones fit this machine."
         )
 
     def _retry(self, question: str, code: str, error: str, card: DatasetCard | None = None) -> str:
@@ -345,16 +373,46 @@ def _ask_prompt(question: str) -> str:
 def extract_code(payload: dict[str, Any]) -> str:
     """Pull the snippet out, tolerating how models actually reply.
 
-    Two habits, both cheap to forgive: a code fence it was told not to use, and
-    a JSON string escaped twice, so the newlines arrive as a literal backslash
-    and an ``n``. The second is fatal and silent — Python reads it as a line
-    continuation and every retry reproduces it — so it is worth repairing here.
+    Three habits, all cheap to forgive. A code fence it was told not to use. A
+    JSON string escaped twice, so newlines arrive as a literal backslash and an
+    ``n``, which Python reads as a line continuation and every retry reproduces.
+    And, on the smallest models, the code landing somewhere other than the field
+    it was asked for: a 1.3B model will answer ``{"code": "total-revenue"}`` and
+    put the actual Python in ``explanation``.
+
+    So the ``code`` field is preferred, and the rest of the reply is searched
+    only when that field does not parse. Taking whatever parses first would let
+    a stray line in a comment outrank the real answer.
     """
-    code = payload.get("code")
-    if not isinstance(code, str):
+    preferred = _snippet(payload.get("code"))
+    if preferred and _parses(preferred) and _looks_like_an_answer(preferred):
+        return preferred
+    for key, value in payload.items():
+        if key == "code":
+            continue
+        candidate = _snippet(value)
+        if candidate and _parses(candidate) and _looks_like_an_answer(candidate):
+            return candidate
+    return preferred
+
+
+def _snippet(value: Any) -> str:
+    """One reply field, unfenced and unescaped, or the empty string."""
+    if not isinstance(value, str):
         return ""
-    fenced = _FENCE.search(code)
-    return _unescape_if_broken((fenced.group(1) if fenced else code).strip())
+    fenced = _FENCE.search(value)
+    return _unescape_if_broken((fenced.group(1) if fenced else value).strip())
+
+
+def _looks_like_an_answer(code: str) -> bool:
+    """Prose parses more often than it looks. ``total-revenue`` is a subtraction.
+
+    So parsing is not enough to call something a snippet. Requiring the contract
+    the prompt actually asked for, an assignment to ``result``, is what tells a
+    label apart from an answer, in either direction: it keeps a title out of the
+    ``code`` field and lets real code be found in the field beside it.
+    """
+    return "result" in code and "=" in code
 
 
 def _unescape_if_broken(code: str) -> str:

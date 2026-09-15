@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 import pytest
 
-from insightsmith.agents.ideation import IdeationAgent, unknown_columns, validate_ideas
+from insightsmith.agents.ideation import IDEA_SCHEMA, IdeationAgent, unknown_columns, validate_ideas
 from insightsmith.config import load_config
 from insightsmith.errors import ProviderError
 from insightsmith.io.sniff import sniff
@@ -270,3 +270,40 @@ def test_a_persistently_wrong_model_fails_with_the_names_it_used(tmp_path: Path,
     agent, _ = _two_reply_agent(tmp_path, _reply(["bogus"]), _reply(["still_bogus"]))
     with pytest.raises(ProviderError, match="bogus"):
         agent.propose(card, limit=3)
+
+
+def test_the_schema_asks_for_what_validation_enforces() -> None:
+    """Demanding six fields from a 0.8B model loses good ideas over their envelope.
+
+    `validate_ideas` has always defaulted rationale, method, artifact and effort,
+    so requiring them in the schema asked for work nothing checked.
+    """
+    required = IDEA_SCHEMA["properties"]["ideas"]["items"]["required"]
+
+    assert set(required) == {"question", "columns"}
+
+
+def test_a_renamed_field_is_still_read(card) -> None:
+    """Small models rename what they are given: `name` for `question`."""
+    payload = {
+        "ideas": [
+            {
+                "name": "Total revenue by region",
+                "columns": ["region"],
+                "reasoning": "shows where sales concentrate",
+            }
+        ]
+    }
+
+    ideas = validate_ideas(payload, card)
+
+    assert len(ideas) == 1
+    assert ideas[0].question == "Total revenue by region"
+    assert ideas[0].rationale == "shows where sales concentrate"
+
+
+def test_a_renamed_field_does_not_weaken_column_validation(card) -> None:
+    """Reading a synonym must not become an excuse to accept an invented column."""
+    payload = {"ideas": [{"name": "x", "fields": ["Fabricated Column"]}]}
+
+    assert validate_ideas(payload, card) == []

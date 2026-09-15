@@ -701,3 +701,52 @@ def test_the_expression_hint_still_wins_where_it_applies() -> None:
     """`last` is on both a Series and an Expr, and the Expr form is the idiom."""
     correction = _correction("AttributeError: 'DataFrame' object has no attribute 'last'", None)
     assert "expression method" in correction
+
+
+def test_a_model_that_never_writes_code_is_named_as_the_problem(tmp_path: Path, data) -> None:
+    """Observed with deepseek-coder:1.3b, which replied {"code": "SUCCESS"}.
+
+    A model writing bad Polars is what the retry loop is for. A model that
+    cannot hold the contract at all is a different failure, and saying "not
+    valid Python" three times sends the reader to tune a prompt that was never
+    the cause.
+    """
+    card, frame = data
+    agent, _ = _agent(tmp_path, _code("total-revenue"), _code("SUCCESS"), _code("done"))
+
+    with pytest.raises(ProviderError) as caught:
+        agent.answer(card, frame, "total revenue?")
+
+    message = str(caught.value)
+    assert "never returned runnable code" in message
+    assert "ismith doctor" in message
+
+
+def test_a_genuine_code_failure_does_not_blame_the_model_size(tmp_path: Path, data) -> None:
+    """Bad Polars is ordinary. Only never-any-code earns the capability hint."""
+    card, frame = data
+    agent, _ = _agent(tmp_path, _code("result = df['missing'].sum()"))
+
+    with pytest.raises(ProviderError) as caught:
+        agent.answer(card, frame, "total?", attempts=2)
+
+    assert "never returned runnable code" not in str(caught.value)
+
+
+def test_code_is_found_when_a_small_model_puts_it_in_the_wrong_field() -> None:
+    """A 1.3B model answers {"code": "total-revenue"} with the Python beside it."""
+    payload = {
+        "code": "total-revenue",
+        "explanation": (
+            "```python\nresult = df.group_by('region').agg(pl.col('revenue').sum())\n```"
+        ),
+    }
+
+    assert extract_code(payload).startswith("result = df.group_by")
+
+
+def test_the_code_field_still_wins_when_it_holds_real_code() -> None:
+    """Searching the rest of the reply must never outrank the field asked for."""
+    payload = {"code": "result = df.height", "explanation": "result = 999"}
+
+    assert extract_code(payload) == "result = df.height"

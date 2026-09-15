@@ -31,8 +31,16 @@ An agentic data consultant that runs on your own machine.
 
 ```bash
 pip install insightsmith
+ismith init                  # writes the config, checks for a local model
 ismith look data/sales.csv
 ```
+
+`ismith init` is optional. The configuration file is written on first use either
+way, at `~/.insightsmith/config.toml`, commented so you can see what may go in
+it. What `init` adds is the rest of the setup: it finds out whether Ollama is
+installed, tells you how to install it for your platform if not, works out which
+catalogued models actually fit your machine, and offers to pull the ones you are
+missing. Nothing is downloaded without asking, because a model is several GB.
 
 ```
 ╭──────────────── source ─────────────────╮

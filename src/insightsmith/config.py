@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
@@ -22,7 +23,14 @@ if sys.version_info >= (3, 11):  # pragma: no cover - trivial version shim
 else:  # pragma: no cover - trivial version shim
     import tomli as tomllib
 
-__all__ = ["DEFAULT_CONFIG_PATH", "Budget", "Config", "load_config"]
+__all__ = [
+    "DEFAULT_CONFIG_PATH",
+    "Budget",
+    "Config",
+    "config_path",
+    "ensure_config",
+    "load_config",
+]
 
 DEFAULT_CONFIG_PATH: Final = Path.home() / ".insightsmith" / "config.toml"
 #: Roles the router knows about. Config may name a subset.
@@ -57,7 +65,78 @@ class Config:
         return self.roles.get(role)
 
 
-def load_config(path: Path | None = None, *, environ: dict[str, str] | None = None) -> Config:
+#: Written on first run. Commented rather than bare, because the file exists to
+#: be edited and a reader should not have to find the docs to know what may go
+#: in it. The values are the defaults, so writing it changes nothing by itself.
+_TEMPLATE: Final = """\
+# insightsmith configuration.
+#
+# Every role may name a different model. Routing a cheap question and planning an
+# analysis are different jobs, and your machine may afford one but not the other.
+# `ismith doctor` reports what actually fits; `ismith models` shows what each
+# role resolves to now.
+
+[roles]
+{roles}
+
+[budget]
+# Spend ceiling for one session, counted only for providers that charge.
+max_usd_per_session = 0.50
+
+# Set true to refuse any provider that would send data off this machine. It is a
+# hard failure, not a warning: configuration will not load if a role points at a
+# remote model.
+local_only = false
+
+# Which dataframe API generated code is written against: polars, pandas or
+# fireducks. Polars is the default and the only one with no platform caveat.
+# engine = "polars"
+"""
+
+
+def config_path(path: Path | None = None, *, environ: Mapping[str, str] | None = None) -> Path:
+    """Where configuration lives, by the same rules for reading and for writing.
+
+    ``INSIGHTSMITH_CONFIG`` has to win in both, or creating a file and loading it
+    can disagree about which file they mean.
+    """
+    if path is not None:
+        return Path(path)
+    env = os.environ if environ is None else environ
+    return Path(env.get("INSIGHTSMITH_CONFIG", DEFAULT_CONFIG_PATH))
+
+
+def ensure_config(
+    path: Path | None = None,
+    *,
+    roles: dict[str, str] | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[Path, bool]:
+    """Write a commented default configuration if there is none.
+
+    Returns the path and whether it had to be created. Loading deliberately does
+    not do this: a function that reads should not write, and the ``Consultant``
+    API has no business creating files in someone's home directory. The CLI calls
+    it, because a first run with no file is exactly when a worked example helps.
+
+    Raises:
+        ConfigError: if the file cannot be written.
+    """
+    target = config_path(path, environ=environ)
+    if target.exists():
+        return target, False
+
+    chosen = roles or _DEFAULT_ROLES
+    body = "\n".join(f'{role:<9}= "{model}"' for role, model in chosen.items())
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_TEMPLATE.format(roles=body), encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"could not create {target}: {exc}") from exc
+    return target, True
+
+
+def load_config(path: Path | None = None, *, environ: Mapping[str, str] | None = None) -> Config:
     """Load configuration, falling back to defaults when the file is absent.
 
     Raises:
@@ -65,7 +144,7 @@ def load_config(path: Path | None = None, *, environ: dict[str, str] | None = No
             role points at a provider that would send data off the machine.
     """
     env = os.environ if environ is None else environ
-    target = path or Path(env.get("INSIGHTSMITH_CONFIG", DEFAULT_CONFIG_PATH))
+    target = config_path(path, environ=env)
 
     payload: dict[str, Any] = {}
     if target.is_file():

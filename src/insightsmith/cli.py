@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import platform
+import shutil
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Final, NoReturn
@@ -21,15 +23,16 @@ from insightsmith.agents.critic import CriticAgent
 from insightsmith.agents.ideation import MAX_IDEAS, Idea, IdeationAgent
 from insightsmith.agents.narrator import NarratorAgent, readable
 from insightsmith.agents.viz import VizAgent
-from insightsmith.config import DEFAULT_CONFIG_PATH, load_config
+from insightsmith.config import DEFAULT_CONFIG_PATH, Config, ensure_config, load_config
 from insightsmith.critique import Critique
 from insightsmith.engine import Engine
 from insightsmith.errors import InsightsmithError
 from insightsmith.execution.artifacts import ArtifactStore
 from insightsmith.hardware.accel import Accelerator, detect_accelerators, detect_installed_models
-from insightsmith.hardware.probe import SystemInfo, probe_system
+from insightsmith.hardware.probe import SystemInfo, probe_system, run_command, stream_command
 from insightsmith.hardware.recommend import (
     DEFAULT_CONTEXT,
+    Placement,
     Recommendation,
     load_catalog,
     recommend,
@@ -207,7 +210,7 @@ def ask(
 
     card = build_card(result, sample)
     try:
-        chosen = engine or load_config().engine
+        chosen = engine or _configured().engine
         answer = CoderAgent(router=Router(), guide=guide, engine=chosen).answer(
             card,
             sample,
@@ -367,6 +370,139 @@ def _critique_payload(critique: Critique | None) -> dict[str, Any] | None:
     }
 
 
+#: Where to send someone whose platform we cannot give a one-liner for.
+OLLAMA_DOCS: Final = "https://ollama.com/download"
+#: Minutes, because a model is gigabytes and a slow connection is not a hang.
+_PULL_TIMEOUT: Final = 3600.0
+
+_INSTALL_HINTS: Final[dict[str, str]] = {
+    "Linux": "curl -fsSL https://ollama.com/install.sh | sh",
+    "Darwin": "brew install ollama     # or download the app from " + OLLAMA_DOCS,
+    "Windows": f"winget install Ollama.Ollama     # or download from {OLLAMA_DOCS}",
+}
+
+
+@app.command()
+def init(
+    pull: Annotated[
+        bool, typer.Option("--pull/--no-pull", help="Offer to download the models that fit.")
+    ] = True,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Pull without asking. Models are gigabytes.")
+    ] = False,
+    context: Annotated[
+        int, typer.Option("--context", "-c", help="Context length to size the KV cache for.")
+    ] = DEFAULT_CONTEXT,
+) -> None:
+    """Set up configuration and check that a local model is actually available."""
+    try:
+        path, created = ensure_config()
+    except InsightsmithError as exc:
+        _fail(exc)
+    console.print(f"[green]config[/] {'created' if created else 'already present'} at {path}")
+
+    binary = shutil.which("ollama")
+    if binary is None:
+        _explain_missing_ollama()
+        return
+    console.print(f"[green]ollama[/] found at {binary}")
+
+    installed = detect_installed_models()
+    if installed:
+        console.print(f"[dim]installed models: {', '.join(sorted(installed))}[/]")
+    else:
+        console.print("[yellow]no models pulled yet[/]")
+
+    system = probe_system()
+    accelerators = detect_accelerators(system)
+    picks = recommend(system, accelerators, load_catalog(), context=context, installed=installed)
+    # EXCLUDED is the recommender's way of saying it will not run here at all.
+    fitting = [r for r in picks if r.fit.placement is not Placement.EXCLUDED]
+    if not fitting:
+        errors.print(
+            "[yellow]no catalogued model fits this machine at "
+            f"{context:,} context. Try `ismith doctor -c 4096` to see the margins.[/]"
+        )
+        return
+
+    table = Table(header_style="bold", title="what fits this machine")
+    for column in ("role", "model", "weights", "kv cache", "runs on", "installed"):
+        table.add_column(column)
+    for pick in fitting:
+        table.add_row(
+            pick.role,
+            pick.model.tag,
+            f"{pick.fit.weights_gb:.1f} GB",
+            f"{pick.fit.kv_cache_gb:.1f} GB",
+            pick.fit.placement.value,
+            "yes" if pick.installed else "no",
+        )
+    console.print(table)
+
+    missing = sorted({p.model.tag for p in fitting if not p.installed})
+    if not missing:
+        console.print("[green]every recommended model is already pulled.[/]")
+        _report_reachable()
+        return
+
+    if not pull:
+        console.print("\nTo fetch them:")
+        for tag in missing:
+            console.print(f"  ollama pull {tag}")
+        return
+
+    console.print(f"\n[bold]{len(missing)}[/] model(s) to download: {', '.join(missing)}")
+    if not yes and not typer.confirm("Pull them now? Each is several GB", default=False):
+        console.print("Skipped. Run `ismith init --pull --yes` when ready.")
+        return
+
+    for tag in missing:
+        console.print(f"[dim]ollama pull {tag}[/]")
+        if not stream_command(["ollama", "pull", tag], timeout=_PULL_TIMEOUT):
+            errors.print(f"[yellow]could not pull {tag}; try `ollama pull {tag}` directly[/]")
+    _report_reachable()
+
+
+def _configured() -> Config:
+    """Load configuration, writing a default file the first time there is none.
+
+    The alternative was telling every new user where the file goes and leaving
+    them to write it. A commented default is a better first contact, and because
+    its values *are* the defaults, creating it changes nothing about the run.
+    A home directory that cannot be written is not an error worth stopping for.
+    """
+    try:
+        path, created = ensure_config()
+    except InsightsmithError:
+        return load_config()
+    if created:
+        console.print(f"[dim]created {path}[/]")
+    return load_config()
+
+
+def _explain_missing_ollama() -> None:
+    """Say how to install it here, rather than pointing at a generic page."""
+    errors.print("[yellow]ollama not found on PATH.[/]")
+    hint = _INSTALL_HINTS.get(platform.system())
+    console.print("\ninsightsmith runs models locally, so it needs Ollama (or another")
+    console.print("OpenAI-compatible endpoint set in the config file).\n")
+    if hint:
+        console.print(f"  {hint}")
+    else:
+        console.print(f"  Install it from {OLLAMA_DOCS}")
+    console.print(f"\nThen run [bold]ismith init[/] again. Docs: {OLLAMA_DOCS}")
+
+
+def _report_reachable() -> None:
+    """Confirm the server answers, which having the binary does not guarantee."""
+    if run_command(["ollama", "list"], timeout=10.0) is None:
+        errors.print(
+            "[yellow]ollama is installed but not answering. Start it with `ollama serve`.[/]"
+        )
+        return
+    console.print("\n[green]ready.[/] Try: [bold]ismith look <file>[/]")
+
+
 @app.command()
 def doctor(
     context: Annotated[
@@ -413,7 +549,7 @@ def models(
 ) -> None:
     """Show which model each role resolves to, and how it will be asked."""
     try:
-        config = load_config()
+        config = _configured()
     except InsightsmithError as exc:
         _fail(exc)
 
@@ -451,11 +587,11 @@ def models(
     if config.path is not None:
         console.print(f"config: {config.path}")
     else:
-        # Naming the path matters: nothing creates the file, so without this the
-        # only way to learn where it goes is to read the source.
+        # Only reachable when the file could not be written, since loading now
+        # creates one. Naming the path is still the useful thing to say.
         console.print(
-            f"config: none found — using defaults. Create [bold]{DEFAULT_CONFIG_PATH}[/] "
-            "to change them."
+            f"config: none found and [bold]{DEFAULT_CONFIG_PATH}[/] could not be "
+            "created — using defaults."
         )
     if config.budget.local_only:
         console.print("[green]local_only is on — remote providers are refused[/]")

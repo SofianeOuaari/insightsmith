@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 import pytest
 
-from insightsmith.config import load_config
+from insightsmith.config import config_path, ensure_config, load_config
 from insightsmith.errors import BudgetError, ConfigError, ProviderError
 from insightsmith.llm.base import Capabilities, Message, Usage
 from insightsmith.llm.ollama import OllamaProvider
@@ -617,3 +617,53 @@ def test_the_caller_can_force_thinking_back_on() -> None:
 def test_thinks_reads_the_capability_list() -> None:
     assert OllamaProvider(client=_always(OLLAMA_SHOW_THINKING)).thinks("qwen3:8b")
     assert not OllamaProvider(client=_always(OLLAMA_SHOW_NO_TOOLS)).thinks("llama3.2:3b")
+
+
+def test_ensure_config_writes_something_worth_reading(tmp_path: Path) -> None:
+    """The file exists to be edited, so a bare dump of defaults would waste it."""
+    target = tmp_path / "deep" / "config.toml"
+
+    path, created = ensure_config(target)
+
+    assert created and path == target
+    text = target.read_text(encoding="utf-8")
+    assert "[roles]" in text and "[budget]" in text
+    assert "local_only" in text and "#" in text, "it should explain itself"
+    # Writing it must not change how anything behaves: the values are defaults.
+    written = load_config(target, environ={}).roles
+    assert written == load_config(tmp_path / "absent.toml", environ={}).roles
+
+
+def test_ensure_config_never_overwrites(tmp_path: Path) -> None:
+    target = tmp_path / "config.toml"
+    target.write_text('[roles]\ncoder = "ollama/mine"\n', encoding="utf-8")
+
+    path, created = ensure_config(target)
+
+    assert not created
+    assert load_config(path, environ={}).roles["coder"] == "ollama/mine"
+
+
+def test_ensure_config_can_be_told_which_models_to_write(tmp_path: Path) -> None:
+    ensure_config(tmp_path / "config.toml", roles={"coder": "ollama/tiny:1b"})
+
+    assert load_config(tmp_path / "config.toml", environ={}).roles["coder"] == "ollama/tiny:1b"
+
+
+def test_reading_and_writing_agree_on_where_the_file_is(tmp_path: Path) -> None:
+    """They resolve the path separately, so they must resolve it the same way."""
+    target = tmp_path / "elsewhere.toml"
+    environ = {"INSIGHTSMITH_CONFIG": str(target)}
+
+    assert config_path(environ=environ) == target
+    assert ensure_config(environ=environ)[0] == target
+    assert load_config(environ=environ).path == target
+
+
+def test_a_path_that_cannot_be_written_is_a_config_error(tmp_path: Path) -> None:
+    """A read-only home is worth saying plainly, not worth a traceback."""
+    blocked = tmp_path / "in-the-way"
+    blocked.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="could not create"):
+        ensure_config(blocked / "config.toml")

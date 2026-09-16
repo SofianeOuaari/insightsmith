@@ -164,6 +164,19 @@ def system_prompt_for(engine: Engine) -> str:
     )
 
 
+#: Framing for the worked example. It is introduced as a shape to adapt rather
+#: than a template to fill, because a recipe is a strong prior: retrieved for the
+#: wrong question it would be copied confidently.
+_RECIPE = """\
+A worked answer to a question of the same shape. Adapt it: the column names in \
+it are placeholders, and the real ones are in the card.
+
+{recipe}"""
+
+#: How much of one recipe is worth its tokens. One is the point; a shortlist
+#: would invite picking the nearest rather than the right one.
+RECIPE_BUDGET: Final = 1_100
+
 #: Framing for the retrieved excerpts. The guide is written for an analyst with a
 #: file in front of them; the coder has neither a file nor permission to open one,
 #: so the excerpts are introduced as API reference rather than as instructions.
@@ -217,6 +230,19 @@ class CoderAgent(Agent):
     #: far cheaper to prevent than to discover in a traceback.
     guide: bool = True
     guide_budget: int = DEFAULT_BUDGET
+    #: Prepend a worked answer to a question of the same shape.
+    #:
+    #: On by default on the strength of a measurement, not a hunch. Fifteen
+    #: questions against qwen3:8b, the recommended coder: 15 of 15 answered
+    #: against 13, a mean of 1.00 attempts against 1.67, and a median of 43s
+    #: against 85s. Six of the fifteen carried the group size, which none did
+    #: without, so the recipes teach the correctness lesson and not only syntax.
+    #:
+    #: It is not uniform. deepseek-coder:6.7b answered 4 of 12 with recipes and
+    #: 7 of 12 without. A code-specialist that already knows the API appears to
+    #: be distracted by an example where a generalist is helped by one, which is
+    #: why this is a flag rather than a constant.
+    recipes: bool = True
     #: Which dataframe API the snippets are written against.
     engine: Engine = Engine.POLARS
 
@@ -232,6 +258,20 @@ class CoderAgent(Agent):
         if not self.guide or self.guide_budget <= 0:
             return ""
         spec = spec_for(self.engine)
+        parts: list[str] = []
+
+        if self.recipes:
+            pattern = reference(
+                question,
+                focus=failure,
+                budget=RECIPE_BUDGET,
+                limit=1,
+                guide=spec.recipes,
+                by_shape=True,
+            )
+            if pattern:
+                parts.append(_RECIPE.format(recipe=pattern))
+
         found = reference(
             question,
             focus=failure,
@@ -239,9 +279,9 @@ class CoderAgent(Agent):
             exclude=spec.excludes,
             guide=spec.guide,
         )
-        if not found:
-            return ""
-        return f"{_REFERENCE.format(name=spec.label, sections=found)}\n\n"
+        if found:
+            parts.append(_REFERENCE.format(name=spec.label, sections=found))
+        return "\n\n".join(parts) + "\n\n" if parts else ""
 
     def answer(
         self,

@@ -53,6 +53,12 @@ CODER_EXCLUDES: Final = ("2", "3", "15", "16")
 
 _K1: Final = 1.5
 _B: Final = 0.75
+#: How much harder a recipe's title counts than its examples, under ``by_shape``.
+#: Three is a measured peak, not a round number: two misroutes 33% of harvested
+#: questions and four 29%, against three's 27%.
+_TITLE_WEIGHT: Final = 3
+#: The line of a recipe that lists the questions it answers, in the book's own words.
+_ASKS: Final = "Questions like:"
 #: The blank line between two rendered sections, and the fence a clip may reopen.
 _JOIN_BYTES: Final = 2
 _FENCE_BYTES: Final = 4
@@ -102,6 +108,13 @@ _NOISE_WORDS: Final = (
 )
 # fmt: on
 _QUERY_NOISE: Final = frozenset(map(stem, _NOISE_WORDS))
+#: Dropped from a question on top of those, but only under ``by_shape``: the two
+#: words so many recipe titles share that they separate no pair of them while
+#: still scoring against nearly all. Just these two — "measure", "column" and
+#: "group" each buy one more question out of 142 and cost a recipe its own top
+#: spot, which is fitting the sample rather than the shape. The guide keeps all
+#: of them, being the place where "column" and "group" are what a reader means.
+_SHAPE_NOISE: Final = frozenset(map(stem, ("category", "per")))
 
 
 def tokenize(text: str) -> list[str]:
@@ -114,6 +127,32 @@ def tokenize(text: str) -> list[str]:
             out.extend(stem(part) for part in token.split("_") if part)
             out.append(stem(token.replace("_", "")))
     return out
+
+
+def _shape_text(section: Section) -> str:
+    """A recipe reduced to the words that name its *shape*.
+
+    A recipe book and a guide want opposite things from BM25. A guide section is
+    retrieved by its content, so indexing the whole body is right. A recipe is
+    retrieved by the question shape it answers, and its body is mostly an example
+    — arbitrary column names and a paragraph of English prose. BM25 rewards rare
+    terms, and the rarest terms in a recipe book are exactly those incidental
+    nouns, so they decide the match while the shape words, being common across
+    recipes, do not. Measured on 179 harvested ideation questions: the phrase
+    "Reporting Spearman beside Pearson costs nothing" routed *what is the average
+    cost for each region* to the correlation recipe. Indexing the title (thrice,
+    for it is the shape stated outright) and the ``Questions like`` line cut
+    misrouting from 43% of questions to 27%.
+
+    Measured again on a second harvest of 190 questions, against one acceptance
+    map: the whole body misroutes 51%, the shape 39%, and 35% once the words
+    every title shares are treated as noise — the level a book of fifteen reached
+    before eight more shapes were added to compete with it.
+    """
+    asks = next((line for line in section.body.splitlines() if line.startswith(_ASKS)), "")
+    # Deduplicated so that words several titles share do not stack with the boost.
+    title = list(dict.fromkeys(tokenize(section.title)))
+    return " ".join(title * _TITLE_WEIGHT) + "\n" + asks
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,9 +173,10 @@ class _Index:
         return total
 
 
-@lru_cache(maxsize=4)
-def _index(guide: str = GUIDE_FILE) -> _Index:
-    corpus = [Counter(tokenize(section.searchable)) for section in sections(guide)]
+@lru_cache(maxsize=8)
+def _index(guide: str = GUIDE_FILE, by_shape: bool = False) -> _Index:
+    text = _shape_text if by_shape else (lambda section: section.searchable)
+    corpus = [Counter(tokenize(text(section))) for section in sections(guide)]
     lengths = [sum(counts.values()) for counts in corpus]
     seen: Counter[str] = Counter()
     for counts in corpus:
@@ -158,6 +198,7 @@ def retrieve(
     limit: int = DEFAULT_LIMIT,
     exclude: tuple[str, ...] = (),
     guide: str = GUIDE_FILE,
+    by_shape: bool = False,
 ) -> tuple[Section, ...]:
     """The sections that best match ``query``, best first.
 
@@ -165,13 +206,15 @@ def retrieve(
     a traceback, on a retry. ``exclude`` drops whole top-level sections by number,
     so a caller can rule out advice its own rules forbid. Sections that match
     nothing are left out rather than padded in: a weak match is worse than a
-    longer prompt.
+    longer prompt. ``by_shape`` indexes a recipe book by the question shape each
+    recipe names rather than by its whole body — see :func:`_shape_text`.
     """
-    index = _index(guide)
+    index = _index(guide, by_shape)
+    noise = _QUERY_NOISE | _SHAPE_NOISE if by_shape else _QUERY_NOISE
     candidates = {
         term: weight
         for term, weight in _weigh(query, focus).items()
-        if term in index.idf and term not in _QUERY_NOISE
+        if term in index.idf and term not in noise
     }
     if not candidates:
         return ()
@@ -206,6 +249,7 @@ def reference(
     limit: int = DEFAULT_LIMIT,
     exclude: tuple[str, ...] = (),
     guide: str = GUIDE_FILE,
+    by_shape: bool = False,
 ) -> str:
     """Rendered sections for ``query``, stopping before ``budget`` bytes.
 
@@ -216,7 +260,9 @@ def reference(
     """
     chosen: list[str] = []
     used = 0
-    for section in retrieve(query, focus=focus, limit=limit, exclude=exclude, guide=guide):
+    for section in retrieve(
+        query, focus=focus, limit=limit, exclude=exclude, guide=guide, by_shape=by_shape
+    ):
         rendered = section.render()
         size = len(rendered.encode("utf-8"))
         if used + size <= budget:

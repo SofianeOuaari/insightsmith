@@ -178,6 +178,13 @@ def ask(
             help="Check the answer for statistical caveats before reporting it.",
         ),
     ] = True,
+    recipes: Annotated[
+        bool,
+        typer.Option(
+            "--recipes/--no-recipes",
+            help="Show the coder a worked answer to a question of the same shape.",
+        ),
+    ] = True,
     engine: Annotated[
         Engine | None,
         typer.Option("--engine", help="Dataframe API the generated code is written against."),
@@ -211,7 +218,7 @@ def ask(
     card = build_card(result, sample)
     try:
         chosen = engine or _configured().engine
-        answer = CoderAgent(router=Router(), guide=guide, engine=chosen).answer(
+        answer = CoderAgent(router=Router(), guide=guide, engine=chosen, recipes=recipes).answer(
             card,
             sample,
             question,

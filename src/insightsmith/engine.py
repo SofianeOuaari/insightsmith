@@ -38,6 +38,10 @@ class EngineSpec:
     label: str
     #: Package data under ``knowledge/``.
     guide: str
+    #: Worked answers by question shape, also package data. Where the guide
+    #: documents one method, a recipe answers a whole question, which is the
+    #: difference between knowing the API and being able to compose it.
+    recipes: str
     #: Guide sections the coder must never see. It is handed a frame already in
     #: memory and forbidden to read files or plot, so reading, charting,
     #: installing and the worked case study can only mislead it.
@@ -88,6 +92,7 @@ _SPECS: Final[dict[Engine, EngineSpec]] = {
         engine=Engine.POLARS,
         label="Polars",
         guide="polars_guide.md",
+        recipes="recipes_polars.md",
         excludes=("2", "3", "15", "16"),
         import_root="polars",
         alias="pl",
@@ -104,6 +109,7 @@ _SPECS: Final[dict[Engine, EngineSpec]] = {
         # its own API extensions. Handing those to a pandas snippet would teach
         # it behaviour the library does not have.
         guide="fireducks_guide.md",
+        recipes="recipes_pandas.md",
         excludes=("1", "2", "3", "4", "9", "10", "13", "14", "17"),
         import_root="pandas",
         alias="pd",
@@ -114,6 +120,9 @@ _SPECS: Final[dict[Engine, EngineSpec]] = {
         engine=Engine.FIREDUCKS,
         label="FireDucks",
         guide="fireducks_guide.md",
+        # FireDucks *is* the pandas API, so the recipes are the same code. One
+        # file rather than two identical ones: a copy only exists to drift.
+        recipes="recipes_pandas.md",
         excludes=("2", "13", "14", "17"),
         import_root="fireducks",
         alias="pd",

@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.8.4] - 2026-09-16
+
+### Features
+
+- **knowledge**: Recipe books of worked answers, one per engine
+
 ## [0.8.3] - 2026-09-15
 
 ### Features

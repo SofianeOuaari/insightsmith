@@ -1,405 +1,168 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/logo.png" alt="insightsmith" width="200">
+<img src="https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/logo.png" alt="insightsmith" width="160">
 
 # insightsmith
 
-**Forging insight from raw data.**
+**An agentic data consultant that runs on your own machine.**
 
-An agentic data consultant that runs on your own machine.
+[![CI](https://github.com/SofianeOuaari/insightsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/SofianeOuaari/insightsmith/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/insightsmith.svg)](https://pypi.org/project/insightsmith/)
+[![Python](https://img.shields.io/pypi/pyversions/insightsmith.svg)](https://pypi.org/project/insightsmith/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+Point it at a data file. It detects the real format, profiles the data, proposes
+analyses, writes and sandbox-executes the code, critiques the statistics, and
+forges a report.
 
 </div>
 
----
+<img src="https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/report_generation_example_1.png" alt="An insightsmith report: 14 findings from a 510-row loan file" width="100%">
 
-> ### What is here today
->
-> **Format detection, loading and profiling** (`ismith look`),
-> **hardware probing with model-fit recommendation** (`ismith doctor`), the
-> **provider layer** routing roles to local or cloud models (`ismith models`),
-> the **dataset card plus ideation** (`ismith look --ideas`), **sandboxed code
-> execution** answering real questions (`ismith ask`), **charts** with a
-> validated palette (`ismith ask --chart`), and a **statistical critic** that
-> prints what is wrong with an answer before you act on it.
->
-> Nothing sends your data anywhere unless you configure a remote provider
-> yourself.
+## Features
 
----
+- **Local-first.** A local model on your hardware is the default, not a degraded
+  fallback. Set `local_only = true` and a remote model becomes a hard error.
+- **Your rows never reach the model.** Every agent sees a *dataset card*: a 2 to
+  5 KB JSON summary with PII masked. Token cost is flat whether the file is 600 KB
+  or 40 GB.
+- **A statistical critic.** Every answer is checked against a fixed list of
+  computable problems (tiny groups, skewed means, silent nulls, outlier-driven
+  correlations) and carries the caveats that fired.
+- **Auditable by construction.** Every result ships with the code that produced
+  it, the hash of the card the model saw, and a notebook that re-runs it.
+- **Hardware-aware.** `ismith doctor` reads your GPU and RAM and tells you which
+  models actually fit, with the KV-cache maths done properly.
+- **Format sniffing that works on messy files.** Semicolon CSVs, decimal commas,
+  cp1252, ambiguous dates. It says what it assumed and how sure it is.
 
-## What it does today
-
-```bash
-pip install insightsmith
-ismith init                  # writes the config, checks for a local model
-ismith look data/sales.csv
-```
-
-`ismith init` is optional. The configuration file is written on first use either
-way, at `~/.insightsmith/config.toml`, commented so you can see what may go in
-it. What `init` adds is the rest of the setup: it finds out whether Ollama is
-installed, tells you how to install it for your platform if not, works out which
-catalogued models actually fit your machine, and offers to pull the ones you are
-missing. Nothing is downloaded without asking, because a model is several GB.
-
-```
-╭──────────────── source ─────────────────╮
-│ format    csv                           │
-│ encoding  cp1252                        │
-│ dialect   delimiter=';' decimal=','     │
-│ confidence 95%                          │
-│ assumed   read as cp1252; charset-      │
-│           normalizer suggested cp775    │
-╰─────────────────────────────────────────╯
-umsatz.csv: 5 rows x 3 columns
-        columns
-┏━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ column ┃ dtype   ┃ semantic    ┃ nulls ┃ unique ┃ detail                ┃
-┡━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━┩
-│ region │ String  │ categorical │     - │      4 │ Nord (2) · Süd (1)    │
-│ menge  │ Int64   │ numeric     │     - │      5 │ min 4 · med 12 · max… │
-│ umsatz │ Float64 │ numeric     │     - │      5 │ min 40.75 · med 120.5 │
-└────────┴─────────┴─────────────┴───────┴────────┴───────────────────────┘
-candidate keys: menge
-```
-
-Add `--json` for the same profile as machine-readable output.
-
-Columns holding **numbers stored as text** are marked as such. A JSON document
-carries no types, so `"92"` arrives as a string and any arithmetic on it fails
-with nothing in the schema to have warned anyone. A document keyed by record id,
-`{"Abomasnow": {...}, "Starly": {...}}`, is read as the table it is rather than
-as one row a thousand columns wide.
-
-### Which local model fits your machine
+## Install
 
 ```bash
-ismith doctor
+pip install insightsmith              # csv, tsv, parquet, arrow, json, jsonl
+pip install insightsmith[excel]       # + xlsx / xls
+pip install insightsmith[viz]         # + charts (matplotlib, plotly)
+pip install insightsmith[pandas]      # + a .to_pandas() escape hatch
+pip install insightsmith[stats]       # + scipy / statsmodels / scikit-learn
+pip install insightsmith[fireducks]   # + the pandas-compatible engine
+pip install insightsmith[pdf]         # + printing a report to PDF
 ```
 
-Probes CPU, RAM, disk and GPU, then sizes each catalogued model against what it
-finds, **per role**, because routing and planning are different jobs and your
-machine may afford one but not the other.
+Base install is seven dependencies: polars, typer, rich, charset-normalizer,
+psutil, httpx and jinja2. No torch, no pandas, no agent framework.
 
-The arithmetic is the point. Weights come from the quantisation's bytes-per-param;
-the KV cache from `2 × layers × n_kv_heads × head_dim × context × 2 bytes`. Using
-`n_kv_heads` rather than the attention-head count is what makes it right: on a
-4 GB laptop GPU at 8k context, `qwen3:8b` (8 KV heads) needs 1.21 GB of cache
-against 4.92 GB of weights, while `deepseek-coder:6.7b` (same size, but 32 KV
-heads and no grouped-query attention) needs **4.29 GB of cache against 4.20 GB
-of weights**. A rule of thumb based on parameter count alone cannot tell you that.
-
-Models that don't fit outright get a partial-offload layer count rather than a
-shrug, and anything larger than your RAM is excluded with a reason.
-
-### Getting an actual answer
+You also need [Ollama](https://ollama.com) with a model pulled, for everything
+except `ismith look`.
 
 ```bash
-ismith ask data/sales.csv "total sales by product type?"
+ismith init      # writes the config, checks Ollama, offers to pull a model that fits
 ```
 
-The model writes a Polars snippet, it runs, and you get the number, plus the
-code that produced it, so the result is checkable rather than taken on trust.
-When the snippet fails, the traceback goes back to the model and it tries again,
-up to three times, then reports the failure honestly instead of inventing an
-answer.
+## Usage
 
-**The model does not have to remember the Polars API.** Every model has read far
-more pandas than Polars, so left alone it reaches for `groupby` and
-`sort_values` and spends a retry discovering they do not exist. A Polars
-reference ships inside the package, and each question pulls the two or three
-sections that bear on it: `group_by` for an aggregation, `.over()` for a
-per-group total, the pitfalls list for a pandas habit. On a retry the traceback
-becomes the query and outweighs the question: `no attribute 'groupby'` names the
-mistake, where the question only named the goal. The retrieval is BM25 over the
-guide's sixty-odd sections in pure stdlib, with no embedding model, no second round
-trip, no index to rebuild. `--no-guide` turns it off.
-
-**A failure says what to use, not only what broke.** A traceback names the
-mistake and stops there, so a model can spend every remaining attempt
-rediscovering the same wrong name. Where the failure implies its own fix, the
-retry carries it:
-
-| The snippet wrote | What comes back |
+| Command | What it does |
 |---|---|
-| `df.groupby(...)` | Polars spells it `group_by` |
-| `df.sort_values(...)` | the Polars equivalent is `.sort()` |
-| `pl.sqrt(x)` | there is no `pl.sqrt()`; every expression has `.sqrt()` |
-| `.group_by("k").mean("x")` | name the column in `agg` instead |
-| a column that does not exist | the columns that do |
-| arithmetic on a text column | cast it first |
+| `ismith look` | Detect the format, profile the data. No LLM. |
+| `ismith ask` | Answer one question by writing and running code. |
+| `ismith forge` | Full autonomous pass, written up as a report. |
+| `ismith doctor` | Probe the machine, recommend models that fit. |
+| `ismith models` | Show which model each role resolves to. |
+| `ismith init` | Set up config and a local model. |
 
-Every one of those is checked against the installed polars before it is offered,
-so a suggestion can never name a method the library does not have. Replies that
-arrive double-escaped, with newlines as a literal backslash and an `n`, are
-repaired rather than retried: Python reads them as a line continuation, and
-every retry would reproduce it.
-
-**You choose which dataframe API the model writes.** Polars is the default;
-`--engine pandas` writes ordinary pandas, and `--engine fireducks` writes the
-same pandas against [FireDucks](https://fireducks-dev.github.io/), which is that
-API with a compiler underneath:
+### Profile a file
 
 ```bash
-ismith ask data/sales.csv "total profit by product type" --engine fireducks
+ismith look data/sales.csv
+ismith look data/sales.csv --json     # machine-readable
+ismith look data/sales.csv --card     # exactly what a model would be shown
 ```
 
-```python
-# --engine polars
-result = df.group_by("Product Type").agg(pl.col("Profit").sum().alias("total_profit"))
+Prints the detected format with a confidence score and what was assumed, then a
+column table (dtype, semantic type, nulls, cardinality, distribution) and any
+quality notes. Works with no model installed.
 
-# --engine pandas, and --engine fireducks, which share an API
-result = df.groupby("Product Type").agg(total_profit=("Profit", "sum"))
-```
-
-The reason to offer the choice is measured rather than aesthetic. Sweeping real
-questions across several datasets, the largest single class of coder failure was
-a model reaching for pandas on a Polars frame: `groupby`, `sort_values`,
-`fillna`. Those are not slips a better prompt fixes, they are the weight of
-everything the model has read. Under FireDucks the same habits are simply
-correct.
-
-Each engine gets its own guide sections, its own retrieval and its own
-corrections, and none of them cross over. `groupby` is a mistake in Polars and
-right in pandas, so the correction that catches it never reaches a pandas
-snippet, where it would talk the model out of working code. The pandas engine
-reads the FireDucks guide with the FireDucks-only chapters excluded, since its
-operational chapters are the pandas API verbatim.
-
-Only the generated code changes. Sniffing, loading and profiling stay on Polars
-`LazyFrame` whichever engine you pick, which is why profiling a 40 GB file does
-not exhaust memory, and results come back as a Polars frame either way so charts
-and the critic behave identically. Set it once with `engine = "fireducks"` in
-`~/.insightsmith/config.toml` if you would rather not pass the flag.
-
-**Which to use.** Measured on a synthetic corpus of nine files, 72 questions
-put to each engine, every other role held fixed:
-
-| engine | answered | median | p90 | charts drawn |
-|---|---|---|---|---|
-| polars | 67/72 | 50s | 76s | 64% |
-| pandas | 65/72 | 32s | 48s | 75% |
-
-The pandas engines are faster because the model writes that API more fluently,
-not because the library is. These files are small and nearly all the time is
-model round trips. Polars answers two more questions out of 72, so correctness
-is close to a tie.
-
-Polars remains the default. It is the only engine with no platform caveat,
-FireDucks publishes no Windows wheels, and a Polars mistake is usually a plain
-wrong method name that the retry loop is built to fix, where pandas indexing is
-forgiving enough to let a model write something ambiguous that fails further
-down. Where the speed is felt, `--engine pandas` is a good choice and these
-numbers are why.
-
-**The code runs in a separate process behind six layers of defence** (design doc
-§7): an allowlist AST gate that refuses `eval`, `exec`, `open`, `getattr`,
-dunder attributes and every import outside the analysis stack; an isolated
-interpreter with a scrubbed environment; CPU, memory and file-size limits;
-a Parquet copy of the data in a scratch directory rather than a path into your
-tree; and `--approve` to see each snippet before it runs.
-
-**The answer comes with a reading of it.** A column of eleven averages is
-evidence, not an answer, and leaves you to do the comparison you already asked
-for:
-
-```text
-┏━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┓
-┃ Occupation           ┃ mean_quality_sleep ┃ std_quality_sleep ┃
-┡━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━┩
-│ Engineer             │ 8.413              │ 0.754             │
-│ Sales Representative │ 4                  │ 0                 │
-└──────────────────────┴────────────────────┴───────────────────┘
-
-Engineers sleep best at 8.4 and Sales Representatives worst at 4.0, a gap of
-4.4 points. Some occupations have no variation at all, such as Salesperson and
-Sales Representative with standard deviations of zero. These groups have only
-one data point, so their mean is not representative of a broader population.
-
-qualified (confidence 0.85) · read the caveats
-  • 3 of 11 groups have no spread at all (std_quality_sleep is zero or
-    missing), which means each holds a single row.
-```
-
-It describes what is in the table and stops there. It is told never to explain
-*why*, never to speculate about cause, and to say "is associated with" rather
-than "causes", because it cannot see the study design. Any caveats the critic
-found are handed to it first, so the reading cannot call a mean typical when the
-column is known to be skewed. `--no-narrate` turns it off.
-
-This is the one agent that sees values rather than the dataset card, because it
-cannot interpret numbers it has not been shown. A result is derived data rather
-than a dataset, but that is not automatically safe: a snippet is free to assign
-`df.head(20)`, which is raw records under a different name. So the result goes
-through the same masking the card uses and the same row cap, and what reaches
-the model is what you are already looking at, no more.
-
-**Every answer is checked before you see it.** A number is easy to produce and
-hard to trust, so each result is reviewed and the caveats printed under it:
-
-```text
-0.11683640472865998
-
-qualified (confidence 0.70) · read the caveats
-  • Pearson correlation assumes a linear relationship and no heavy tails, but
-    avg_rating and num_published_lectures carry outliers. A few extreme rows can
-    create or hide this number entirely. Check it against method="spearman".
-```
-
-Almost everything the critic knows it **measures** rather than asks: a
-correlation reported on outliered columns, a mean on a skewed one, groups of
-three described as a comparison, forty p-values with no correction, a division
-that produced an infinity, missing values the code never acknowledged, and an
-answer computed on a sampled file rather than the whole of it. Those are
-arithmetic, and asking a small model whether statistics are sound produces
-confident prose with nothing behind it, which is the failure this is meant to
-reduce rather than reproduce.
-
-It also catches the commonest way an answer goes wrong: **answering a different
-question**. Ask for compliance violations *per year* and get back one overall
-number, and that is not the answer, however correct the arithmetic. Where the
-question names a real column to group by and the result is a single row, that is
-settled by counting rather than by opinion, and the snippet goes back to the
-coder to be written properly. Asked to judge the same results, a small model
-called every one of them sound.
-
-What genuinely cannot be computed is whether a result answers a question in
-looser phrasing, and that is the only part a model is given. Statistical caveats
-never trigger a retry, because rewriting a snippet cannot make the data less
-skewed.
-
-The confidence figure is a derived index, not a probability that the answer is
-right. It falls by a fixed weight per caveat so more or worse findings always
-score lower, and identical inputs always score the same. Read the caveats; they
-say something specific. `--no-critique` turns the whole pass off.
-
-Add `--chart` and the answer is drawn as well as printed:
+### Ask a question
 
 ```bash
-ismith ask data/sales.csv "total sales by product type?" --chart
+ismith ask data/sales.csv "which region grew fastest last quarter?"
+ismith ask data/sales.csv "correlation between discount and churn" --chart
+ismith ask data/sales.csv "average order value by segment" --engine pandas
 ```
 
-![A ranked horizontal bar chart of total sales by product type](https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/chart-example.png)
+The code is generated, checked by an AST gate, run in a sandboxed subprocess, and
+printed alongside the answer. If it crashes, the traceback is fed back and it
+tries again, up to three times.
 
-**The model picks the chart, it does not draw it.** It returns a form and which
-column fills which role; the renderer draws that spec. So charts are consistent,
-reproducible for a given spec, and no plotting code written by a model ever runs.
-A spec naming a column the result doesn't have is discarded, exactly as an idea
-would be.
+<img src="https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/chart-example.png" alt="A bar chart produced by ismith ask --chart" width="620">
 
-The palette was validated with a colour-blindness and contrast checker rather
-than chosen by eye, and two of its measurements are enforced in code: slots are
-assigned in a fixed order and a ninth series raises instead of inventing a hue,
-and scatter caps at three series because all-pairs forms fail the separation
-floor at four. Bars are ranked, long tails fold into "other", and one series
-gets one hue, because colouring every bar differently implies a distinction the
-data does not contain.
+Useful flags: `--approve` (see the code before it runs), `--no-code`, `--critique/--no-critique`,
+`--engine polars|pandas|fireducks`, `--chart`, `--dark`, `--json`.
 
-When a result cannot be drawn, the reason says which way it cannot. A single
-correlation coefficient is a number with nothing to plot it against, which is a
-different problem from having no numeric column at all, and being told the wrong
-one sends you looking in the wrong place.
-
-Each run saves a PNG and a self-contained interactive HTML next to a manifest
-recording the question, the code and the card hash, so a figure found later can
-be traced back to the data behind it.
-
-**Read [SECURITY.md](SECURITY.md) before pointing this at anything sensitive.**
-It is defence in depth against a model erring by accident, which is the
-realistic failure, and explicitly *not* a security boundary against a deliberately
-malicious prompt. The resource limits are POSIX-only; on Windows the gate and
-the timeout are all there is.
-
-### Asking a model what's worth analysing
+### See what is worth analysing
 
 ```bash
-ismith look data/sales.csv --ideas    # ranked analyses
-ismith look data/sales.csv --card     # exactly what the model will be shown
+ismith look data/sales.csv --ideas
 ```
 
-**The dataframe is never pasted into a prompt.** Everything an agent sees arrives
-through a *dataset card*: a compact JSON summary of schema, per-column statistics,
-quality flags, a correlation shortlist, and a few stratified example rows with
-obvious PII masked. Three things follow, and they are the reason for the design:
+<img src="https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/ideas-example.png" alt="Eight ranked analysis ideas, each naming the columns it needs" width="720">
 
-- **Token cost is flat regardless of file size.** A 589 KB, 4248-row, 20-column
-  file produces a 4.8 KB card, and so would a 40 GB one. That is what makes an
-  8B local model workable.
-- **No raw records leave the machine.** Sensitive columns are redacted by name,
-  recognisable values by pattern.
-- **The card hashes**, so the same data yields the same plan and results cache.
+Ideas come back ranked, each naming the columns it needs. **Any idea referencing a
+column the card does not contain is discarded before you see it**, which removes
+most hallucination for the price of a set-membership test.
 
-Ideas come back ranked, each naming the columns it needs, and **any idea
-referencing a column the card doesn't contain is discarded before you see it**.
-That one check removes most hallucination for the price of a set-membership test.
-
-![Eight ranked analysis ideas for a sales dataset, each naming the columns it needs](https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/ideas-example.png)
-
-Every column named above (`Market`, `Product Type`, `State`, `Marketing`,
-`Total Expenses`) exists in the file. Anything else was dropped before it
-reached the table.
-
-The quality notes travel on the card too, so a model hedges where the data
-warrants it: given a date column flagged as ambiguous, it proposes parsing it
-"with caution" rather than trusting it.
-
-### Wiring up a model
+### Forge a report
 
 ```bash
-ismith models
+ismith forge data/sales.csv -o out/                        # propose analyses, answer them, write it up
+ismith forge data/sales.csv "which region grew?" -o out/   # or ask your own
+ismith forge data/sales.csv -o out/ -n 15 --pdf
 ```
 
-Shows what each role resolves to, whether it stays on your machine, and **how it
-will be asked for structured output**. Configure it in `~/.insightsmith/config.toml`:
+Four files land in the output directory:
+
+| File | What it is |
+|---|---|
+| `report.html` | The report, with figures inline, a contents rail, light and dark |
+| `report.md` | The same content as Markdown, for a repo or a wiki |
+| `report.ipynb` | The run rebuilt as a notebook that executes |
+| `report.pdf` | With `--pdf`, and the `pdf` extra installed |
+
+Every finding carries the code that produced it, the caveats the critic raised, a
+confidence index and how many attempts it took. A question that fails is listed
+under "Not answered" rather than dropped.
+
+<img src="https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/report_generation_example_2.png" alt="One finding: the narrative, the result table and the chart behind it" width="680">
+
+The notebook is not a transcript. Its first cell rebuilds the dataframe from the
+original file so every later cell runs, and it says so when the run was on a
+sample and re-running will not reproduce the numbers.
+
+### Pick a model for your machine
+
+```bash
+ismith doctor        # GPU, RAM, and the models that fit
+ismith models        # which model answers as coder, critic, narrator
+```
+
+## Configuration
+
+`~/.insightsmith/config.toml`, written on first run and commented.
 
 ```toml
-[roles]
-planner = "ollama/qwen3:8b"
-coder   = "ollama/qwen2.5-coder:7b"
-cheap   = "ollama/qwen3:4b"
+local_only = true          # a remote model becomes a hard error
+engine = "polars"          # polars | pandas | fireducks
 
-[budget]
-max_usd_per_session = 0.50
-local_only = true
+[roles]
+ideation = "ollama/qwen3:8b"
+coder    = "ollama/qwen3:8b"
+critic   = "ollama/qwen3:8b"
+narrator = "ollama/qwen3:8b"
 ```
 
-One class covers every backend that speaks the OpenAI wire format: OpenAI,
-OpenRouter, DeepInfra, Together, Groq, Fireworks, Mistral, Gemini's compat
-endpoint, and local vLLM / llama.cpp / LM Studio. They differ only by
-base URL and key. Ollama is written natively instead, since `/api/show`,
-`/api/ps` and `keep_alive` are the whole reason to run locally.
-
-**Capabilities are read, not assumed.** Ollama reports whether a model supports
-tool-calling, so the router picks its approach up front rather than failing
-mid-run: tool-calling where available, JSON mode next, and otherwise prompted
-JSON with a bounded retry that feeds the parse failure back. Small models wrap
-JSON in prose and code fences no matter how firmly told not to, so that path is
-the common case, not an edge case.
-
-**`local_only = true` is a hard failure, not a warning.** Point a role at a
-remote provider with it set and loading the config raises, naming the offending
-role. A privacy switch that only warned would not be a privacy switch.
-
-**Format detection doesn't trust the extension.** A three-stage cascade of
-extension hint, then magic bytes, then a text-dialect probe, where each stage can veto the
-one before it. A Parquet file named `.csv` is loaded as Parquet, and you're told
-the extension lied. Every result carries a confidence score and the list of
-assumptions behind it; below 80% those assumptions are printed rather than hidden.
-
-It is built for the files that actually turn up: semicolon-delimited cp1252 CSVs
-with decimal commas and thousands separators, BOMs, comment preambles, quoted
-fields containing the delimiter, gzip and single-member zip wrappers.
-
-**Profiling** reports per-column dtype and semantic type, null rates, cardinality,
-numeric summaries with outlier counts by two different methods, temporal ranges,
-text lengths, category frequencies, candidate keys, and quality notes: duplicate
-and near-duplicate rows, constant and near-constant columns, runaway cardinality,
-class imbalance.
-
-### As a library
+## As a library
 
 ```python
-from insightsmith import load, profile, sniff
+from insightsmith import sniff, load, profile
 
 spec = sniff("data/sales.csv")
 print(spec.format, spec.encoding, spec.confidence, spec.warnings)
@@ -407,89 +170,76 @@ print(spec.format, spec.encoding, spec.confidence, spec.warnings)
 frame = load(spec)  # a Polars LazyFrame; nothing read yet
 result = profile(spec)
 print(result.summary())
-for issue in result.issues:
-    print(issue.severity.value, issue.column, issue.message)
 ```
 
-Polars `LazyFrame` is the internal representation throughout, so Parquet, Arrow,
-NDJSON and UTF-8 CSV are scanned rather than loaded.
+## How it works
 
-**Formats loadable today:** csv, tsv, xlsx/xlsm (with `[excel]`), xls, parquet,
-feather/arrow, json, jsonl/ndjson. Detected-but-not-yet-loadable formats (sqlite,
-duckdb, xml, html, ods, orc, hdf5, spss, stata, sas) say so, and name the release
-that will handle them.
-
-## Install
-
-```bash
-pip install insightsmith            # csv, tsv, parquet, arrow, json, jsonl
-pip install insightsmith[excel]     # + xlsx / xls
-pip install insightsmith[viz]       # + charts (matplotlib, plotly)
-pip install insightsmith[pandas]    # + a .to_pandas() escape hatch
-pip install insightsmith[stats]     # + scipy / statsmodels / scikit-learn
-pip install insightsmith[fireducks] # + the pandas-compatible engine
+```text
+sniff -> load -> profile -> card -+- ideation -> ranked ideas
+                                  |
+                                  +- question -> coder -> sandbox -> critic
+                                                   ^        |
+                                                   +- retry -+   (max 3, traceback fed back)
+                                                            |
+                                                            +-> viz -> narrator -> report
 ```
 
-The base install is six dependencies: polars, typer, rich, charset-normalizer,
-psutil and httpx (plus a TOML backport on Python 3.10 only). No torch, no pandas,
-no agent framework. Extras stay optional on purpose.
+Polars `LazyFrame` is the internal representation, so Parquet, Arrow, NDJSON and
+UTF-8 CSV are scanned rather than loaded. `--engine` picks the API the *generated
+snippet* is written against; Parquet is the handover, so a result is a Polars
+frame whichever engine ran.
 
-## What it won't do
+The coder is given worked examples from a bundled recipe book matched to the
+shape of your question. Measured on qwen3:8b across 15 questions, that took
+answered-on-first-attempt from 13/15 to 15/15 and halved the median time.
 
-Worth stating plainly, in advance:
+**Formats loadable today:** csv, tsv, xlsx/xlsm (`[excel]`), xls, parquet,
+feather/arrow, json, jsonl/ndjson. Formats that are detected but not yet loadable
+say so rather than failing obscurely.
 
-- **Large files are profiled on a sample.** Above a size threshold the profile is
-  built from a strided sample of the rows, and every affected statistic is marked
-  `estimated`. Row counts remain exact; distributions are approximate. An answer
-  computed on such a file carries a caveat saying so.
-- **The critic reduces statistical nonsense; it does not remove it.** It checks a
-  fixed list of things that are computable, so it cannot catch a confounder, a
-  survivorship bias, or a question that was the wrong question to ask. A clean
-  verdict means nothing on the list fired, not that the analysis is sound.
-- **`--chart` often has nothing to draw.** Plenty of good questions have a single
-  number for an answer, and a correlation coefficient or an overall average
-  cannot be plotted against anything. Roughly two answers in five come back as
-  one value, and the chart is skipped with the reason given rather than a
-  meaningless figure produced.
-- **FireDucks does not run everywhere.** It publishes wheels for Linux x86_64
-  and macOS arm64 only, so on Windows the extra installs nothing and `--engine
-  fireducks` has no engine to reach. Polars is the default for that reason.
-- **Encoding detection is a guess on small files.** Single-byte codepages are
-  genuinely ambiguous in a few hundred bytes. Sparse non-ASCII text is read as
-  cp1252 and the substitution is reported, but it can still be wrong.
-- **Statistics have edges.** The IQR fence is degenerate when the middle 50% of a
-  column is a single value, so outliers are counted by a MAD-based modified
-  z-score as well, and both numbers are shown. They disagree usefully.
-- **"Near-duplicate" means one specific thing**: identical once string columns
-  are trimmed and case-folded. It is not fuzzy matching.
-- **PII masking is best-effort, not a guarantee.** It catches values that look
-  like contact details or identifiers and blanks columns whose names say they
-  hold personal data. It cannot recognise a person's name in free text, an
-  address split across columns, or an identifier in a format it hasn't seen. If
-  data must not leave the machine, set `local_only`. Masking is defence in
-  depth, not a substitute for keeping it local. `--card` shows exactly what would
-  be sent, and `include_examples=False` omits sample values entirely.
-- **Dates are inferred, and `04/01/10` is genuinely ambiguous.** Date columns load
-  as strings and the format is inferred afterwards, so a file polars cannot parse
-  still loads. Where day-first and month-first fit equally well, the chosen format
-  is reported as a quality note rather than picked silently. Check it before
-  trusting anything grouped by that column.
-- **Thousands separators are detected but not stripped.** polars has no option for
-  them, so such columns may load as strings.
-- **No XML row-unit discovery, and zstd payloads aren't inspected** (no stdlib
-  decompressor before Python 3.14).
-- **Throughput figures are estimates, not benchmarks.** `ismith doctor` derives
-  tok/s from published peak memory bandwidth, which no real decode loop reaches.
-  Devices missing from that table report `unknown` rather than a plausible
-  substitute, and the catalog only contains models whose layer and KV-head counts
-  were read from a running Ollama, never guessed.
+## Limits
+
+Worth stating plainly, in advance.
 
 - **LLMs write wrong code confidently.** `ismith ask` prints the code for exactly
-  that reason, so check it. The retry loop fixes code that *crashes*; it cannot
-  tell that a snippet ran cleanly and answered the wrong question. The
-  statistical critic that catches some of that arrives in 0.7.0.
+  that reason. The retry loop fixes code that *crashes*; it cannot tell that a
+  snippet ran cleanly and answered the wrong question.
+- **The critic reduces statistical nonsense; it does not remove it.** It checks a
+  fixed list of computable things, so it cannot catch a confounder, survivorship
+  bias, or a question that was the wrong question. A clean verdict means nothing
+  on the list fired, not that the analysis is sound. Confidence is an index
+  computed from the caveats, not a probability that the answer is right.
 - **The sandbox is defence in depth, not a security boundary.** See
-  [SECURITY.md](SECURITY.md). Resource limits are POSIX-only.
+  [SECURITY.md](SECURITY.md). Resource limits are POSIX-only; on Windows the AST
+  gate and the timeout are all there is.
+- **Large files are profiled on a sample.** Above a size threshold every affected
+  statistic is marked `estimated`. Row counts stay exact, distributions are
+  approximate, and an answer computed on such a file carries a caveat.
+- **PII masking is best-effort.** It catches values that look like contact details
+  or identifiers. It cannot recognise a name in free text or an identifier in a
+  format it has not seen. If data must not leave the machine, set `local_only`.
+- **`--chart` often has nothing to draw.** Roughly two answers in five are a
+  single number, and the chart is skipped with the reason given rather than a
+  meaningless figure produced.
+- **Dates are inferred, and `04/01/10` is genuinely ambiguous.** Where day-first
+  and month-first both fit, the chosen format is reported as a quality note
+  rather than picked silently.
+- **Throughput figures are estimates, not benchmarks.** `ismith doctor` derives
+  tok/s from published peak memory bandwidth, which no real decode loop reaches.
+  Devices missing from that table report `unknown`.
+- **FireDucks does not run everywhere.** Linux x86_64 and macOS arm64 only, which
+  is why Polars is the default.
+
+## Contributing
+
+```bash
+uv sync --all-extras
+uv run pytest
+uv run ruff check --fix && uv run ruff format
+uv run mypy src
+```
+
+Conventional Commits. One feature, one branch, one squashed PR.
 
 ## License
 

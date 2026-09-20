@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "insightsmith"
-version = "0.8.4"
+version = "0.8.5"
 description = "Agentic data consultant that runs on your own hardware"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,6 +37,7 @@ dependencies = [
   "typer>=0.12",
   "rich>=13.7",
   "charset-normalizer>=3.3",
+  "jinja2>=3.1",
   "psutil>=5.9",
   "httpx>=0.27",
   "tomli>=2.0 ; python_version < '3.11'",
@@ -60,6 +61,11 @@ fireducks = [
   "pandas>=2.0",
   "pyarrow>=15",
 ]
+# WeasyPrint needs cairo and pango from the system, which is exactly why PDF is
+# an extra and not a base dependency: HTML, Markdown and the notebook are always
+# written, and only `--pdf` can fail for want of an install. Left out of `all`
+# so a plain `uv sync --all-extras` still resolves on a machine without them.
+pdf = ["weasyprint>=62"]
 all = ["insightsmith[excel,pandas,viz,stats,fireducks]"]
 
 [project.scripts]
@@ -151,7 +157,7 @@ disallow_untyped_defs = false
 # their absence at runtime, so an unresolved import there is expected rather than
 # a defect. When the extra *is* installed, matplotlib's own py.typed still wins.
 [[tool.mypy.overrides]]
-module = ["matplotlib.*", "plotly.*", "scipy.*", "statsmodels.*", "sklearn.*"]
+module = ["matplotlib.*", "plotly.*", "scipy.*", "statsmodels.*", "sklearn.*", "weasyprint.*"]
 ignore_missing_imports = true
 
 # ----------------------------------------------------------------------------

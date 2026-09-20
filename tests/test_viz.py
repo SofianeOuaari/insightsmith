@@ -14,7 +14,7 @@ import polars as pl
 import pytest
 
 from insightsmith.agents.viz import _undrawable, default_spec, validate_spec
-from insightsmith.execution.artifacts import ArtifactStore, slugify
+from insightsmith.execution.artifacts import MAX_SLUG, ArtifactStore, slugify
 from insightsmith.viz.render import (
     MAX_CATEGORIES,
     ChartSpec,
@@ -382,3 +382,25 @@ def test_a_numeric_axis_that_fits_keeps_its_type() -> None:
     prepared = _prepare(ChartSpec(form=Form.BAR, x="year", y="v"), frame)
 
     assert prepared["year"].dtype == pl.Int64
+
+
+def test_a_long_title_keeps_room_for_the_colour_mode_suffix(tmp_path: Path) -> None:
+    """Found in a real run: fifteen questions, and two of the figures came out
+    named `...-2.png`.
+
+    `forge` writes each figure twice, light and dark. The dark name is the same
+    stem plus a suffix, and on a long question the suffix was the part that fell
+    off the end of the slug. Both names then truncated to the same string, so the
+    store numbered the second one and the filename stopped saying which mode it
+    held.
+    """
+    store = ArtifactStore(tmp_path)
+    title = "What is the average Total Revolving Credit Limit for different Loan Grades?"
+
+    light = store.write_bytes(f"{slugify(title)}.png", b"light")
+    room = slugify(title, limit=MAX_SLUG - len("dark") - 1)
+    dark = store.write_bytes(f"{room}-dark.png", b"dark")
+
+    assert dark.path.stem.endswith("-dark"), dark.path.name
+    assert dark.path != light.path
+    assert dark.path.read_bytes() == b"dark"

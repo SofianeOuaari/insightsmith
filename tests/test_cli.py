@@ -629,3 +629,37 @@ def test_init_pulls_nothing_without_consent(tmp_path: Path, monkeypatch) -> None
     runner.invoke(app, ["init", "--yes"])
     assert pulled, "--yes should have pulled"
     assert all(cmd[:2] == ["ollama", "pull"] for cmd in pulled)
+
+
+def _params(name: str) -> dict[str, object]:
+    """A command's declared typer params, read off the callback.
+
+    Read from the declaration rather than from rendered help text: rich wraps
+    and hyphenates the help output, so asserting on it tests the terminal width.
+    """
+    command = next(c for c in app.registered_commands if (c.name or c.callback.__name__) == name)
+    return {"callback": command.callback, "hidden": command.hidden}
+
+
+def test_forge_is_aliased_as_report_so_nobody_has_to_guess() -> None:
+    """§1 asks for the alias by name, and asks that it stay out of the help."""
+    forge = _params("forge")
+    alias = _params("report")
+
+    assert alias["callback"] is forge["callback"], "aliased, not duplicated, so they cannot drift"
+    assert alias["hidden"] and not forge["hidden"]
+
+
+def test_forge_writes_every_surface_but_pdf_by_default(samples: dict[str, Path]) -> None:
+    """The three that need no system libraries are unconditional."""
+    import inspect
+
+    from insightsmith.cli import forge
+
+    defaults = {
+        name: parameter.default for name, parameter in inspect.signature(forge).parameters.items()
+    }
+
+    assert defaults["notebook"] is True
+    assert defaults["pdf"] is False, "weasyprint needs pango and cairo; it cannot be the default"
+    assert defaults["chart"] is True and defaults["critique"] is True

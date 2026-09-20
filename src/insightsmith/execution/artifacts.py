@@ -18,7 +18,10 @@ from typing import Any, Final
 __all__ = ["Artifact", "ArtifactStore"]
 
 _SAFE = re.compile(r"[^a-z0-9]+")
-_MAX_SLUG: Final = 48
+#: Filenames are cut to this, which callers building a suffixed name have to
+#: budget for: a suffix appended past the limit is truncated away, and the two
+#: names then collide into a numbered one that no longer says them apart.
+MAX_SLUG: Final = 48
 
 
 @dataclass(slots=True)
@@ -96,7 +99,7 @@ class ArtifactStore:
         return loaded if isinstance(loaded, list) else []
 
 
-def slugify(text: str, *, limit: int = _MAX_SLUG) -> str:
+def slugify(text: str, *, limit: int = MAX_SLUG) -> str:
     """A filename that survives every filesystem, from arbitrary prose."""
     cleaned = _SAFE.sub("-", text.lower()).strip("-")
     return cleaned[:limit].rstrip("-") or "artifact"

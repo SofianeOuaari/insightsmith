@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="en" data-theme="{{ "dark" if report.dark else "auto" }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{ report.title }}</title>
+<style>
+  /* Surfaces and ink are the same tokens viz/theme.py draws the figures with,
+     so an embedded PNG sits on its own background rather than a near-miss.
+     Everything here degrades in WeasyPrint, which has no color-mix, oklch,
+     :has or container queries: the print rules below flatten what it skips. */
+  :root {
+    --surface: #fcfcfb;
+    --raised: #ffffff;
+    --sunken: #f4f3f0;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --ink-muted: #898781;
+    --rule: #e6e5df;
+    --rule-strong: #d6d5cd;
+    --accent: #2a78d6;
+    --accent-soft: #eaf2fd;
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --shadow: 0 1px 2px rgba(11, 11, 10, .04), 0 8px 24px -12px rgba(11, 11, 10, .10);
+    --radius: 14px;
+    --radius-sm: 8px;
+    --sans: "Inter var", Inter, ui-sans-serif, system-ui, -apple-system,
+            "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace;
+    /* Fluid scale: one ratio, so the rhythm holds from a phone to a print page. */
+    --step-0: clamp(.95rem, .92rem + .15vw, 1.02rem);
+    --step-1: clamp(1.08rem, 1.02rem + .3vw, 1.2rem);
+    --step-2: clamp(1.3rem, 1.18rem + .6vw, 1.6rem);
+    --step-3: clamp(1.75rem, 1.45rem + 1.5vw, 2.6rem);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --surface: #1a1a19; --raised: #232322; --sunken: #141413;
+      --ink: #ffffff; --ink-2: #c3c2b7; --ink-muted: #898781;
+      --rule: #343431; --rule-strong: #46463f;
+      --accent: #3987e5; --accent-soft: #1d2b3d;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px -12px rgba(0, 0, 0, .55);
+    }
+  }
+  :root[data-theme="dark"] {
+    --surface: #1a1a19; --raised: #232322; --sunken: #141413;
+    --ink: #ffffff; --ink-2: #c3c2b7; --ink-muted: #898781;
+    --rule: #343431; --rule-strong: #46463f;
+    --accent: #3987e5; --accent-soft: #1d2b3d;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px -12px rgba(0, 0, 0, .55);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 2rem; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition: none !important; animation: none !important; }
+  }
+  body {
+    margin: 0; padding: 0 16px; background: var(--surface); color: var(--ink);
+    font-family: var(--sans); font-size: var(--step-0); line-height: 1.65;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+
+  .shell { max-width: 78rem; margin: 0 auto; display: block; }
+  @media (min-width: 1100px) {
+    .shell { display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: 3.5rem; }
+  }
+  main { max-width: 46rem; padding: 3.5rem 0 5rem; min-width: 0; }
+
+  /* Contents rail. Hidden below the breakpoint and in print, where the page
+     numbers do this job and a list of links does not. */
+  nav.toc { display: none; }
+  @media (min-width: 1100px) {
+    nav.toc {
+      display: block; position: sticky; top: 0; align-self: start;
+      max-height: 100vh; overflow-y: auto; padding: 3.5rem 0 2rem;
+      font-size: .85rem; line-height: 1.45;
+    }
+    nav.toc h2 {
+      font-size: .7rem; text-transform: uppercase; letter-spacing: .09em;
+      color: var(--ink-muted); margin: 0 0 .85rem; font-weight: 600;
+    }
+    nav.toc ol { list-style: none; margin: 0; padding: 0; }
+    nav.toc li { margin: 0 0 .1rem; }
+    /* A question is a sentence, and fifteen of them set in full turn the rail
+       into a second copy of the report, so each is clamped to two lines with
+       the whole of it one hover away in the title attribute. The clamp is on an
+       inner span, not the padded anchor: -webkit-box measures its own content
+       box, so padding on the clamped element lets a third line peek through. */
+    nav.toc a {
+      display: block; padding: .38rem .7rem; border-radius: var(--radius-sm);
+      color: var(--ink-2); text-decoration: none; transition: background .15s, color .15s;
+    }
+    nav.toc a span {
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    nav.toc a:hover { background: var(--sunken); color: var(--ink); }
+    nav.toc a.here { background: var(--accent-soft); color: var(--accent); font-weight: 550; }
+  }
+
+  h1 {
+    font-size: var(--step-3); line-height: 1.08; margin: 0 0 .6rem;
+    letter-spacing: -.033em; font-weight: 640;
+  }
+  h2 {
+    font-size: var(--step-2); line-height: 1.25; margin: 0 0 .9rem;
+    letter-spacing: -.021em; font-weight: 620;
+  }
+  h3 {
+    font-size: .74rem; text-transform: uppercase; letter-spacing: .085em;
+    color: var(--ink-muted); margin: 1.6rem 0 .6rem; font-weight: 640;
+  }
+  p { margin: 0 0 1rem; }
+  .lede { color: var(--ink-2); font-size: var(--step-1); line-height: 1.55; }
+
+  /* Header ------------------------------------------------------------- */
+  header { margin-bottom: 2.5rem; }
+  .eyebrow {
+    display: flex; align-items: center; gap: .55rem; margin: 0 0 1.1rem;
+    font-size: .74rem; letter-spacing: .085em; text-transform: uppercase;
+    color: var(--ink-muted); font-weight: 600;
+  }
+  .eyebrow .spark {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none;
+  }
+  .eyebrow .sep { color: var(--rule-strong); }
+
+  ul.facts {
+    list-style: none; display: flex; flex-wrap: wrap; gap: .4rem;
+    margin: 1.4rem 0 0; padding: 0;
+  }
+  ul.facts li {
+    display: inline-flex; align-items: baseline; gap: .4rem;
+    border: 1px solid var(--rule); border-radius: 999px;
+    padding: .28rem .8rem; font-size: .8rem; background: var(--raised);
+  }
+  ul.facts .k { color: var(--ink-muted); }
+  ul.facts .v { color: var(--ink-2); font-weight: 550; }
+  ul.facts .v.mono { font-family: var(--mono); font-size: .93em; }
+
+  /* Stat tiles. label · value, per the figures contract: sentence case, no
+     trailing colon, value semibold and tabular. No delta, because a report of
+     one run has no prior period to compare against. */
+  .tiles {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+    gap: .75rem; margin: 2rem 0 0;
+  }
+  .tile {
+    background: var(--raised); border: 1px solid var(--rule);
+    border-radius: var(--radius); padding: .95rem 1.1rem;
+  }
+  .tile .label {
+    font-size: .74rem; color: var(--ink-muted); margin: 0 0 .3rem;
+    letter-spacing: .01em;
+  }
+  .tile .value {
+    font-size: 1.6rem; font-weight: 620; letter-spacing: -.025em;
+    font-variant-numeric: tabular-nums; line-height: 1.1;
+  }
+
+  .note {
+    display: flex; gap: .7rem; align-items: flex-start;
+    background: var(--raised); border: 1px solid var(--rule);
+    border-left: 3px solid var(--warning); border-radius: var(--radius-sm);
+    padding: .85rem 1.1rem; margin: 1.6rem 0; font-size: .89rem; color: var(--ink-2);
+  }
+
+  /* Findings ----------------------------------------------------------- */
+  article {
+    background: var(--raised); border: 1px solid var(--rule);
+    border-radius: var(--radius); padding: 1.9rem 1.9rem 1.6rem;
+    margin: 1.25rem 0; box-shadow: var(--shadow);
+  }
+  @media (max-width: 640px) { article { padding: 1.35rem 1.15rem; } }
+  article > .index {
+    display: inline-block; font-size: .72rem; font-weight: 650;
+    letter-spacing: .08em; color: var(--accent); margin: 0 0 .5rem;
+  }
+  .hero {
+    font-size: clamp(2.2rem, 1.6rem + 2.6vw, 3.1rem); font-weight: 640;
+    letter-spacing: -.035em; font-variant-numeric: tabular-nums;
+    margin: .4rem 0 1rem; line-height: 1.05;
+  }
+
+  .scroller { overflow-x: auto; margin: 1.2rem 0; border-radius: var(--radius-sm); }
+  table { border-collapse: collapse; width: 100%; font-size: .87rem; }
+  thead th {
+    position: sticky; top: 0; background: var(--raised);
+    color: var(--ink-muted); font-weight: 600; font-size: .74rem;
+    text-transform: uppercase; letter-spacing: .06em; white-space: nowrap;
+    border-bottom: 1px solid var(--rule-strong);
+  }
+  th, td { text-align: left; padding: .52rem .8rem; border-bottom: 1px solid var(--rule); }
+  th:first-child, td:first-child { padding-left: 0; }
+  th:last-child, td:last-child { padding-right: 0; }
+  tbody tr:last-child td { border-bottom: none; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .dropped { color: var(--ink-muted); font-size: .8rem; margin: -.4rem 0 0; }
+
+  figure { margin: 1.4rem 0 0; }
+  figure img {
+    max-width: 100%; height: auto; display: block;
+    border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  }
+  figcaption { color: var(--ink-muted); font-size: .8rem; margin-top: .5rem; }
+  /* One figure shown at a time, chosen by the same cascade as the tokens. */
+  .fig-dark { display: none; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .fig-light { display: none; }
+    :root:not([data-theme="light"]) .fig-dark { display: block; }
+  }
+  :root[data-theme="dark"] .fig-light { display: none; }
+  :root[data-theme="dark"] .fig-dark { display: block; }
+  :root[data-theme="light"] .fig-light { display: block; }
+  :root[data-theme="light"] .fig-dark { display: none; }
+
+  ul.caveats { margin: .4rem 0 0; padding: 0; list-style: none; }
+  ul.caveats li {
+    position: relative; padding-left: 1.1rem; margin: .35rem 0;
+    color: var(--ink-2); font-size: .89rem;
+  }
+  /* Muted, not amber. The status hue is 1.79:1 on the light surface, which is
+     invisible at 5px and reads as a rendering fault rather than a warning. The
+     heading above the list already says these are caveats, so the marker is
+     doing no work the colour would have to carry. */
+  ul.caveats li::before {
+    content: ""; position: absolute; left: 0; top: .62em;
+    width: 5px; height: 5px; border-radius: 50%; background: var(--ink-muted);
+  }
+
+  /* Verdict. The status hue is the dot only: status colors are reserved and
+     never worn as text, and #fab219 is 1.79:1 on the light surface anyway. */
+  .verdict {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem;
+    margin: 1.4rem 0 0; padding-top: 1rem; border-top: 1px solid var(--rule);
+    font-size: .82rem; color: var(--ink-muted);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: .42rem;
+    color: var(--ink-2); font-weight: 550;
+  }
+  /* Status colour, reserved and never themed, carried by the dot only: the word
+     beside it is the relief the sub-3:1 amber needs, and text never wears a
+     status hue. Sizes are 9px so the weakest of the three still registers. */
+  .chip .dot {
+    width: 9px; height: 9px; border-radius: 50%; background: var(--good); flex: none;
+    box-shadow: 0 0 0 1px var(--rule-strong);
+  }
+  .chip.qualified .dot { background: var(--warning); }
+  .chip.unsound .dot { background: var(--critical); }
+  .meter {
+    display: inline-block; width: 46px; height: 5px; border-radius: 3px;
+    background: var(--rule); position: relative; overflow: hidden; vertical-align: middle;
+  }
+  .meter i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 3px; }
+
+  details { margin: 1.1rem 0 0; }
+  summary {
+    cursor: pointer; color: var(--ink-2); font-size: .84rem; font-weight: 550;
+    list-style: none; display: inline-flex; align-items: center; gap: .4rem;
+    padding: .3rem .7rem; border: 1px solid var(--rule); border-radius: 999px;
+    transition: background .15s, border-color .15s;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary:hover { background: var(--sunken); border-color: var(--rule-strong); }
+  summary::after { content: "+"; color: var(--ink-muted); font-family: var(--mono); }
+  details[open] summary::after { content: "\2212"; }
+  .codeblock { position: relative; margin: .8rem 0 0; }
+  pre {
+    background: var(--sunken); border: 1px solid var(--rule);
+    border-radius: var(--radius-sm); padding: 1rem 1.1rem; margin: 0;
+    overflow-x: auto; font-size: .79rem; line-height: 1.55;
+  }
+  code { font-family: var(--mono); }
+  button.copy {
+    position: absolute; top: .55rem; right: .55rem; border: 1px solid var(--rule);
+    background: var(--raised); color: var(--ink-2); border-radius: 6px;
+    padding: .2rem .55rem; font-size: .72rem; font-family: var(--sans);
+    cursor: pointer; opacity: 0; transition: opacity .15s;
+  }
+  .codeblock:hover button.copy, button.copy:focus-visible { opacity: 1; }
+
+  .unrun { background: var(--raised); border: 1px solid var(--rule);
+           border-radius: var(--radius); padding: 1.5rem 1.9rem; margin: 1.25rem 0; }
+  .unrun ol { margin: .6rem 0 0; padding-left: 1.2rem; color: var(--ink-2); }
+  .unrun li { margin: .3rem 0; }
+
+  footer {
+    margin-top: 3rem; padding: 1.6rem 1.9rem; border: 1px dashed var(--rule-strong);
+    border-radius: var(--radius); color: var(--ink-2); font-size: .85rem; line-height: 1.6;
+  }
+  footer strong { color: var(--ink); }
+
+  /* Theme switch. Absent in print and harmless where JS does not run. */
+  .switch {
+    position: fixed; top: 1rem; right: 1rem; z-index: 10;
+    display: inline-flex; gap: 2px; padding: 3px; background: var(--raised);
+    border: 1px solid var(--rule); border-radius: 999px; box-shadow: var(--shadow);
+  }
+  .switch button {
+    border: 0; background: transparent; color: var(--ink-muted); cursor: pointer;
+    border-radius: 999px; padding: .28rem .6rem; font: inherit; font-size: .72rem;
+  }
+  .switch button[aria-pressed="true"] { background: var(--sunken); color: var(--ink); }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  @media print {
+    :root { --surface: #fff; --raised: #fff; --sunken: #fff;
+            --ink: #000; --ink-2: #333; --ink-muted: #666;
+            --rule: #ddd; --rule-strong: #bbb; --shadow: none; }
+    body { padding: 0; font-size: 10.5pt; }
+    .shell { display: block; max-width: none; }
+    main { max-width: none; padding: 0; }
+    nav.toc, .switch, button.copy, .fig-dark { display: none !important; }
+    .fig-light { display: block !important; }
+    /* Deliberately breakable. Holding a whole finding together pushed each one
+       onto a fresh sheet and left most of the previous blank; the table, the
+       figure and the code block keep their own no-break rules, which is where
+       a split actually hurts. */
+    article { border: 0; border-top: 1px solid var(--rule-strong); border-radius: 0;
+              padding: 1rem 0 .5rem; margin: 0; box-shadow: none; }
+    h2, .index { page-break-after: avoid; break-after: avoid; }
+    .tiles { break-inside: avoid; }
+    .verdict { break-before: avoid; }
+    figure, table, pre { page-break-inside: avoid; break-inside: avoid; }
+    details { display: block; }
+    details > summary { display: none; }
+    thead th { position: static; }
+    footer { page-break-before: avoid; border-style: solid; }
+    @page { margin: 18mm 16mm; }
+  }
+</style>
+</head>
+<body>
+<div class="switch" role="group" aria-label="Colour theme">
+  <button type="button" data-set="light" aria-pressed="false">Light</button>
+  <button type="button" data-set="dark" aria-pressed="false">Dark</button>
+  <button type="button" data-set="auto" aria-pressed="true">Auto</button>
+</div>
+
+<div class="shell">
+  <nav class="toc" aria-label="Contents">
+    <h2>Findings</h2>
+    <ol>
+      {% for section in sections %}
+      <li>
+        <a href="#finding-{{ loop.index }}" title="{{ section.finding.question }}"><span>{{ loop.index }}. {{ section.finding.question }}</span></a>
+      </li>
+      {% endfor %}
+      {% if report.unanswered %}
+      <li><a href="#not-answered">Not answered</a></li>
+      {% endif %}
+    </ol>
+  </nav>
+
+  <main>
+    <header>
+      <p class="eyebrow">
+        <span class="spark"></span>insightsmith
+        <span class="sep">/</span>{{ report.stamp }}
+      </p>
+      <h1>{{ report.title }}</h1>
+      <p class="lede">
+        {{ sections | length }} question{{ "" if sections | length == 1 else "s" }} answered
+        against {{ report.shape }}{% if report.unanswered %}, {{ report.unanswered | length }} left unrun{% endif %}.
+      </p>
+
+      <ul class="facts">
+        <li><span class="k">Source</span><span class="v mono">{{ report.source }}</span></li>
+        <li><span class="k">Engine</span><span class="v">{{ report.engine }}</span></li>
+        {% if report.card_hash %}
+        <li><span class="k">Card</span><span class="v mono">{{ report.card_hash }}</span></li>
+        {% endif %}
+        {% for role, model in report.models | dictsort %}
+        <li><span class="k">{{ role | capitalize }}</span><span class="v mono">{{ model }}</span></li>
+        {% endfor %}
+      </ul>
+
+      <div class="tiles">
+        <div class="tile">
+          <p class="label">Findings</p>
+          <p class="value">{{ sections | length }}</p>
+        </div>
+        <div class="tile">
+          <p class="label">Rows analysed</p>
+          <p class="value">{{ "{:,}".format(report.profile.n_rows) }}</p>
+        </div>
+        <div class="tile">
+          <p class="label">Columns</p>
+          <p class="value">{{ report.profile.n_columns }}</p>
+        </div>
+        {% if report.quality_count %}
+        <div class="tile">
+          <p class="label">Quality notes</p>
+          <p class="value">{{ report.quality_count }}</p>
+        </div>
+        {% endif %}
+      </div>
+
+      {% if report.sampled %}
+      <p class="note"><span>{{ report.sampled }}</span></p>
+      {% endif %}
+
+      {% if report.issues %}
+      {% if report.issues | length > 4 %}
+      {# Past a handful these push the first finding below the fold on a wide
+         file. Folded, but never dropped: the count stays on the summary tile. #}
+      <details>
+        <summary>{{ report.issues | length }} quality notes on the data</summary>
+        <ul class="caveats">
+          {% for issue in report.issues %}<li>{{ issue }}</li>{% endfor %}
+        </ul>
+      </details>
+      {% else %}
+      <h3>Quality notes</h3>
+      <ul class="caveats">
+        {% for issue in report.issues %}<li>{{ issue }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+      {% endif %}
+    </header>
+
+    {% for section in sections %}
+    {% set f = section.finding %}
+    <article id="finding-{{ loop.index }}">
+      <p class="index">{{ "%02d" | format(loop.index) }}</p>
+      <h2>{{ f.question }}</h2>
+
+      {% if f.tile %}<p class="hero">{{ f.answer }}</p>{% endif %}
+      {% if f.narrative %}<p>{{ f.narrative }}</p>{% endif %}
+
+      {% if section.columns %}
+      <div class="scroller">
+        <table>
+          <thead>
+            <tr>
+              {% for column in section.columns %}
+              <th{% if f.numeric[loop.index0] %} class="num"{% endif %}>{{ column }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in section.rows %}
+            <tr>
+              {% for cell in row %}
+              <td{% if f.numeric[loop.index0] %} class="num"{% endif %}>{{ cell }}</td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if section.dropped %}
+      <p class="dropped">{{ "{:,}".format(section.dropped) }} further row{{ "" if section.dropped == 1 else "s" }} not shown. The notebook re-runs the code for all of them.</p>
+      {% endif %}
+      {% endif %}
+
+      {% if f.png %}
+      <figure>
+        {% if f.png_dark and f.png_light %}
+        {# Two bakes of one figure, switched by the same rules that switch the
+           colour tokens, so the figure cannot disagree with the page it sits on.
+           Deliberately not a picture element: a matching source wins over the
+           img's own src, so it kept serving the dark file to a reader whose OS
+           is dark but who had asked this page for light. #}
+        <img class="fig-light" src="{{ f.png_light.name }}" alt="{{ f.question }}">
+        <img class="fig-dark" src="{{ f.png_dark.name }}" alt="" aria-hidden="true">
+        {% else %}
+        <img src="{{ f.png.name }}" alt="{{ f.question }}">
+        {% endif %}
+        {% if f.chart_html %}
+        <figcaption>Interactive version: <code>{{ f.chart_html.name }}</code></figcaption>
+        {% endif %}
+      </figure>
+      {% endif %}
+
+      {% if f.caveats %}
+      <h3>Caveats</h3>
+      <ul class="caveats">
+        {% for caveat in f.caveats %}<li>{{ caveat }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if f.confidence is not none %}
+      <p class="verdict">
+        <span class="chip {{ f.verdict }}"><span class="dot"></span>{{ f.verdict }}</span>
+        <span>
+          confidence
+          <span class="meter"><i style="width: {{ (f.confidence * 100) | round | int }}%"></i></span>
+          {{ "%.2f" | format(f.confidence) }}
+        </span>
+        <span>{{ f.attempts }} attempt{{ "" if f.attempts == 1 else "s" }}</span>
+      </p>
+      {% endif %}
+
+      <details>
+        <summary>Code that produced this</summary>
+        <div class="codeblock">
+          <button class="copy" type="button">Copy</button>
+          <pre><code>{{ f.code }}</code></pre>
+        </div>
+      </details>
+    </article>
+    {% endfor %}
+
+    {% if report.unanswered %}
+    <section class="unrun" id="not-answered">
+      <h2>Not answered</h2>
+      <p class="lede">Proposed and left unrun, so this is not the whole of what was asked.</p>
+      <ol>
+        {% for question in report.unanswered %}<li>{{ question }}</li>{% endfor %}
+      </ol>
+    </section>
+    {% endif %}
+
+    <footer>
+      <strong>How to read this.</strong>
+      Every number here was produced by code a language model wrote, shown under each answer.
+      Models write wrong code confidently, so the code is the claim and the number is only its
+      output. The critic flags statistical problems it can measure and misses the ones it cannot.
+      Confidence is an index computed from the caveats, not a probability that the answer is right.
+    </footer>
+  </main>
+</div>
+
+<script>
+  // Progressive enhancement only: every line below is optional, and the page is
+  // complete without it. WeasyPrint runs no script at all.
+  (function () {
+    var root = document.documentElement;
+    var KEY = "insightsmith-theme";
+    function apply(mode) {
+      root.setAttribute("data-theme", mode);
+      document.querySelectorAll(".switch button").forEach(function (b) {
+        b.setAttribute("aria-pressed", String(b.dataset.set === mode));
+      });
+      try { localStorage.setItem(KEY, mode); } catch (e) { /* private mode */ }
+    }
+    try {
+      var saved = localStorage.getItem(KEY);
+      apply(saved || root.getAttribute("data-theme") || "auto");
+    } catch (e) { apply(root.getAttribute("data-theme") || "auto"); }
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function () {
+      if (root.getAttribute("data-theme") === "auto") { apply("auto"); }
+    });
+    document.querySelectorAll(".switch button").forEach(function (b) {
+      b.addEventListener("click", function () { apply(b.dataset.set); });
+    });
+
+    document.querySelectorAll("button.copy").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var code = b.parentNode.querySelector("code").textContent;
+        navigator.clipboard.writeText(code).then(function () {
+          b.textContent = "Copied";
+          setTimeout(function () { b.textContent = "Copy"; }, 1400);
+        });
+      });
+    });
+
+    var links = document.querySelectorAll("nav.toc a");
+    if (links.length && "IntersectionObserver" in window) {
+      var seen = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) { return; }
+          links.forEach(function (a) {
+            a.classList.toggle("here", a.getAttribute("href") === "#" + entry.target.id);
+          });
+        });
+      }, { rootMargin: "-10% 0px -80% 0px" });
+      document.querySelectorAll("article[id], section[id]").forEach(function (el) {
+        seen.observe(el);
+      });
+    }
+  })();
+</script>
+</body>
+</html>

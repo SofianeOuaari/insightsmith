@@ -27,7 +27,7 @@ from insightsmith.config import DEFAULT_CONFIG_PATH, Config, ensure_config, load
 from insightsmith.critique import Critique
 from insightsmith.engine import Engine
 from insightsmith.errors import InsightsmithError
-from insightsmith.execution.artifacts import ArtifactStore
+from insightsmith.execution.artifacts import MAX_SLUG, ArtifactStore, slugify
 from insightsmith.hardware.accel import Accelerator, detect_accelerators, detect_installed_models
 from insightsmith.hardware.probe import SystemInfo, probe_system, run_command, stream_command
 from insightsmith.hardware.recommend import (
@@ -42,6 +42,7 @@ from insightsmith.llm.router import Router
 from insightsmith.profiling import ColumnProfile, Profile, profile_with_sample
 from insightsmith.profiling.card import build_card
 from insightsmith.profiling.quality import Severity
+from insightsmith.report import Finding, Report, render_html, render_markdown, render_notebook
 
 app = typer.Typer(
     add_completion=False,
@@ -266,8 +267,14 @@ def ask(
     _render_answer(answer, show_code=show_code, narrative=story)
 
 
-def _draw(answer: Answer, card: Any, out: Path, *, dark: bool) -> list[str]:
-    """Choose a chart, render both forms, and record where they came from."""
+def _draw(answer: Answer, card: Any, out: Path, *, dark: bool, both: bool = False) -> list[str]:
+    """Choose a chart, render both forms, and record where they came from.
+
+    ``both`` also renders the opposite colour mode. A report is written once and
+    read later, on a machine whose dark-mode setting nobody knew at the time, so
+    a figure baked in one mode lands on a page in the other. Re-rendering costs
+    a second matplotlib pass against an LLM call that already dominates the run.
+    """
     from insightsmith.viz.render import render_html, render_png
 
     frame = answer.frame
@@ -287,19 +294,26 @@ def _draw(answer: Answer, card: Any, out: Path, *, dark: bool) -> list[str]:
         "card_hash": card.hash if card is not None else "",
         "code": answer.code,
     }
+    stem = spec.title or answer.question
     try:
-        png = store.write_bytes(
-            f"{spec.title or answer.question}.png", render_png(spec, frame, mode=mode), **meta
-        )
-        html = store.write_text(
-            f"{spec.title or answer.question}.html", render_html(spec, frame, mode=mode), **meta
-        )
+        png = store.write_bytes(f"{stem}.png", render_png(spec, frame, mode=mode), **meta)
+        html = store.write_text(f"{stem}.html", render_html(spec, frame, mode=mode), **meta)
+        paths = [str(png.path), str(html.path)]
+        if both:
+            other = "light" if dark else "dark"
+            # Budget for the suffix before the name is cut, or a long title
+            # loses the "-dark" and collides with the light file it names.
+            room = slugify(stem, limit=MAX_SLUG - len(other) - 1)
+            flipped = store.write_bytes(
+                f"{room}-{other}.png", render_png(spec, frame, mode=other), **meta
+            )
+            paths.append(str(flipped.path))
     except (InsightsmithError, ValueError, OSError) as exc:
         errors.print(f"[yellow]no chart drawn: {escape(str(exc))}[/]")
         return []
 
     console.print(f"[green]chart[/] {spec.form.value} · saved {png.path} and {html.path.name}")
-    return [str(png.path), str(html.path)]
+    return paths
 
 
 def _confirm(code: str) -> bool:
@@ -387,6 +401,189 @@ _INSTALL_HINTS: Final[dict[str, str]] = {
     "Darwin": "brew install ollama     # or download the app from " + OLLAMA_DOCS,
     "Windows": f"winget install Ollama.Ollama     # or download from {OLLAMA_DOCS}",
 }
+
+
+@app.command()
+def forge(
+    path: Annotated[Path, typer.Argument(help="Data file to analyse.")],
+    questions: Annotated[
+        list[str] | None,
+        typer.Argument(help="Questions to answer. Omitted, the ideas are proposed and answered."),
+    ] = None,
+    out: Annotated[
+        Path, typer.Option("--out", "-o", help="Directory for the report and its figures.")
+    ] = Path("insightsmith-out"),
+    limit: Annotated[
+        int, typer.Option("--limit", "-n", help="How many proposed ideas to answer.")
+    ] = 5,
+    engine: Annotated[
+        Engine | None,
+        typer.Option("--engine", help="Dataframe API the generated code is written against."),
+    ] = None,
+    chart: Annotated[
+        bool, typer.Option("--chart/--no-chart", help="Draw each answer that has a table.")
+    ] = True,
+    critique: Annotated[
+        bool, typer.Option("--critique/--no-critique", help="Check each answer for caveats.")
+    ] = True,
+    narrate: Annotated[
+        bool, typer.Option("--narrate/--no-narrate", help="Say what each result means, in words.")
+    ] = True,
+    notebook: Annotated[
+        bool, typer.Option("--notebook/--no-notebook", help="Also write a runnable notebook.")
+    ] = True,
+    pdf: Annotated[
+        bool, typer.Option("--pdf", help="Also print the report to PDF. Needs insightsmith[pdf].")
+    ] = False,
+    dark: Annotated[bool, typer.Option("--dark", help="Render figures on a dark surface.")] = False,
+) -> None:
+    """Run a full pass over the data and forge it into a report.
+
+    One question at a time is `ask`. This is the whole job: propose the analyses,
+    answer each one, critique it, chart it, and hammer the lot into a deliverable.
+    """
+    spec = None
+    try:
+        spec = sniff(path)
+        profile_result, sample = profile_with_sample(spec)
+    except (InsightsmithError, OSError) as exc:
+        _fail(exc)
+    except PolarsError as exc:
+        hint = f" (read as {spec.format.value})" if spec is not None else ""
+        _fail(f"could not parse {path}{hint}: {_first_line(exc)}")
+
+    card = build_card(profile_result, sample)
+    chosen = engine or _configured().engine
+    router = Router()
+
+    asked = list(questions or [])
+    unanswered: list[str] = []
+    if not asked:
+        console.print(f"[dim]proposing analyses for {escape(path.name)}...[/]")
+        try:
+            proposed = IdeationAgent(router=router).propose(card, limit=max(limit, MAX_IDEAS))
+        except InsightsmithError as exc:
+            _fail(exc)
+        asked = [idea.question for idea in proposed[:limit]]
+        unanswered = [idea.question for idea in proposed[limit:]]
+        if not asked:
+            _fail("no analyses proposed; pass questions explicitly")
+
+    out.mkdir(parents=True, exist_ok=True)
+    findings: list[Finding] = []
+    for index, question in enumerate(asked, 1):
+        console.print(f"[dim]{index}/{len(asked)}[/] {escape(question)}")
+        try:
+            answer = CoderAgent(router=router, engine=chosen).answer(
+                card,
+                sample,
+                question,
+                critic=CriticAgent(router=router) if critique else None,
+                profile=profile_result,
+            )
+        except InsightsmithError as exc:
+            # One question failing is not the run failing. Say so and carry on,
+            # or a four-question report is lost to the fifth.
+            errors.print(f"[yellow]skipped:[/] {escape(_first_line(exc))}")
+            unanswered.append(question)
+            continue
+
+        story = ""
+        if narrate:
+            story = NarratorAgent(router=router).narrate(
+                question, frame=answer.frame, value=answer.value, critique=answer.critique
+            )
+        png = chart_html = png_flipped = None
+        if chart and answer.frame is not None:
+            drawn = _draw(answer, card, out, dark=dark, both=True)
+            if len(drawn) >= 2:
+                png, chart_html = Path(drawn[0]), Path(drawn[1])
+            if len(drawn) == 3:
+                png_flipped = Path(drawn[2])
+        findings.append(
+            Finding(
+                question=question,
+                code=answer.code,
+                narrative=story,
+                kind=answer.kind,
+                value=answer.value,
+                frame=answer.frame,
+                critique=answer.critique,
+                attempts=max(1, len(answer.attempts)),
+                png=png,
+                png_flipped=png_flipped,
+                chart_html=chart_html,
+                dark=dark,
+            )
+        )
+
+    if not findings:
+        _fail("nothing to report: every question failed")
+
+    report = Report(
+        source=path,
+        profile=profile_result,
+        findings=findings,
+        unanswered=unanswered,
+        card_hash=getattr(card, "hash", ""),
+        engine=chosen.value,
+        models=_routed_models(router),
+        dark=dark,
+    )
+    written = _write_report(report, out, notebook=notebook, pdf=pdf)
+    console.print()
+    console.print(
+        f"[green]forged[/] {len(findings)} finding(s) from {escape(path.name)}"
+        + (f", {len(unanswered)} left unrun" if unanswered else "")
+    )
+    for line in written:
+        console.print(f"  {line}")
+
+
+# `report` is what a reader will guess; `forge` is the name. Hidden so the help
+# stays one command per job, and aliased rather than duplicated so they cannot drift.
+app.command("report", hidden=True)(forge)
+
+
+def _routed_models(router: Router) -> dict[str, str]:
+    """The models that actually answered, read back off the router.
+
+    Read from resolved routes rather than from config: config says what was
+    asked for, and a report should record what ran.
+    """
+    found: dict[str, str] = {}
+    for role in ("ideation", "coder", "critic", "narrator", "viz"):
+        try:
+            found[role] = router.route(role).reference
+        except InsightsmithError:
+            continue
+    return found
+
+
+def _write_report(report: Report, out: Path, *, notebook: bool, pdf: bool) -> list[str]:
+    """Every surface the run asked for, and where each landed."""
+    written: list[str] = []
+    page = render_html(report)
+    for name, payload in (("report.md", render_markdown(report)), ("report.html", page)):
+        target = out / name
+        target.write_text(payload, encoding="utf-8")
+        written.append(str(target))
+    if notebook:
+        target = out / "report.ipynb"
+        target.write_text(render_notebook(report), encoding="utf-8")
+        written.append(str(target))
+    if pdf:
+        from insightsmith.report import render_pdf
+
+        try:
+            target = out / "report.pdf"
+            target.write_bytes(render_pdf(page, base_url=out))
+            written.append(str(target))
+        except InsightsmithError as exc:
+            # The HTML is already on disk, so this is a missing surface, not a
+            # failed run: print it to a browser and use its print dialogue.
+            errors.print(f"[yellow]no pdf written:[/] {escape(str(exc))}")
+    return written
 
 
 @app.command()

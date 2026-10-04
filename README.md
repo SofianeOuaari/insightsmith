@@ -31,6 +31,8 @@ forges a report.
   correlations) and carries the caveats that fired.
 - **Auditable by construction.** Every result ships with the code that produced
   it, the hash of the card the model saw, and a notebook that re-runs it.
+- **Conversational.** `ismith chat` keeps the profile, the card and the
+  frame in memory, so a follow-up refers to the turn before it.
 - **Hardware-aware.** `ismith doctor` reads your GPU and RAM and tells you which
   models actually fit, with the KV-cache maths done properly.
 - **Format sniffing that works on messy files.** Semicolon CSVs, decimal commas,
@@ -48,8 +50,9 @@ pip install insightsmith[fireducks]   # + the pandas-compatible engine
 pip install insightsmith[pdf]         # + printing a report to PDF
 ```
 
-Base install is seven dependencies: polars, typer, rich, charset-normalizer,
-psutil, httpx and jinja2. No torch, no pandas, no agent framework.
+Base install is eight dependencies: polars, typer, rich, charset-normalizer,
+psutil, httpx, jinja2 and prompt_toolkit. No torch, no pandas, no agent
+framework.
 
 You also need [Ollama](https://ollama.com) with a model pulled, for everything
 except `ismith look`.
@@ -64,6 +67,7 @@ ismith init      # writes the config, checks Ollama, offers to pull a model that
 |---|---|
 | `ismith look` | Detect the format, profile the data. No LLM. |
 | `ismith ask` | Answer one question by writing and running code. |
+| `ismith chat` | Ask many, in a conversation that remembers. |
 | `ismith forge` | Full autonomous pass, written up as a report. |
 | `ismith doctor` | Probe the machine, recommend models that fit. |
 | `ismith models` | Show which model each role resolves to. |
@@ -97,6 +101,39 @@ tries again, up to three times.
 
 Useful flags: `--approve` (see the code before it runs), `--no-code`, `--critique/--no-critique`,
 `--engine polars|pandas|fireducks`, `--chart`, `--dark`, `--json`.
+
+### Hold a conversation
+
+```bash
+ismith chat data/sales.csv
+ismith chat data/sales.csv --engine pandas
+```
+
+`ask` pays for sniffing, loading and profiling on every question and forgets the
+answer. `chat` keeps all three, so a follow-up can refer to what came before.
+
+```
+> what is the total revenue by region?
+> now show only the top 2 of those        <- it remembers what "those" were
+```
+
+<img src="https://raw.githubusercontent.com/SofianeOuaari/insightsmith/main/assets/repl_screenshot.png" alt="The insightsmith REPL, showing the banner and the command list" width="760">
+
+Tab completes on your file's own column names, which is where a question most
+often goes wrong. History persists between sessions.
+
+| Command | |
+|---|---|
+| `/columns` `/card` `/ideas` | what is in the file, and what is worth asking |
+| `/code` `/chart` `/critique` | toggle what each answer shows |
+| `/engine pandas` | switch the API the generated code targets |
+| `/save out/` | forge the conversation into a report and a notebook |
+| `/undo` `/clear` | forget the last turn, or all of them |
+
+What a later turn is shown is the question, the code and the *shape* of each
+earlier result: column names and a row count, never the rows themselves. The
+rule that keeps raw records off the wire matters more here than anywhere, since
+a transcript is resent on every turn.
 
 ### See what is worth analysing
 

@@ -294,6 +294,7 @@ class CoderAgent(Agent):
         on_code: Any = None,
         critic: CriticAgent | None = None,
         profile: Profile | None = None,
+        context: str = "",
     ) -> Answer:
         """Write code for ``question``, run it, and retry on failure.
 
@@ -306,11 +307,16 @@ class CoderAgent(Agent):
         *data*, and rewriting the snippet cannot make the data less skewed — those
         ride along on the answer instead.
 
+        ``context`` is what a conversation remembers: earlier questions, the code
+        that answered them, and the shape of what came back. It sits after the
+        reference and before the question, so a follow-up reads as a follow-up
+        while the retrieved recipe still leads.
+
         Raises:
             ProviderError: if no attempt produced a usable answer.
         """
         history: list[Attempt] = []
-        prompt = self.reference_for(question) + _ask_prompt(question)
+        prompt = self.reference_for(question) + context + _ask_prompt(question)
 
         for _ in range(max(1, attempts)):
             payload = self.ask(card, prompt, CODE_SCHEMA)

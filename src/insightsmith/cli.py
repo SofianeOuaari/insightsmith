@@ -17,7 +17,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
-from insightsmith import __version__
+from insightsmith import __version__, repl
 from insightsmith.agents.coder import Answer, CoderAgent
 from insightsmith.agents.critic import CriticAgent
 from insightsmith.agents.ideation import MAX_IDEAS, Idea, IdeationAgent
@@ -43,6 +43,7 @@ from insightsmith.profiling import ColumnProfile, Profile, profile_with_sample
 from insightsmith.profiling.card import build_card
 from insightsmith.profiling.quality import Severity
 from insightsmith.report import Finding, Report, render_html, render_markdown, render_notebook
+from insightsmith.session import SessionState
 
 app = typer.Typer(
     add_completion=False,
@@ -527,7 +528,7 @@ def forge(
         unanswered=unanswered,
         card_hash=getattr(card, "hash", ""),
         engine=chosen.value,
-        models=_routed_models(router),
+        models=router.resolved,
         dark=dark,
     )
     written = _write_report(report, out, notebook=notebook, pdf=pdf)
@@ -543,21 +544,6 @@ def forge(
 # `report` is what a reader will guess; `forge` is the name. Hidden so the help
 # stays one command per job, and aliased rather than duplicated so they cannot drift.
 app.command("report", hidden=True)(forge)
-
-
-def _routed_models(router: Router) -> dict[str, str]:
-    """The models that actually answered, read back off the router.
-
-    Read from resolved routes rather than from config: config says what was
-    asked for, and a report should record what ran.
-    """
-    found: dict[str, str] = {}
-    for role in ("ideation", "coder", "critic", "narrator", "viz"):
-        try:
-            found[role] = router.route(role).reference
-        except InsightsmithError:
-            continue
-    return found
 
 
 def _write_report(report: Report, out: Path, *, notebook: bool, pdf: bool) -> list[str]:
@@ -584,6 +570,50 @@ def _write_report(report: Report, out: Path, *, notebook: bool, pdf: bool) -> li
             # failed run: print it to a browser and use its print dialogue.
             errors.print(f"[yellow]no pdf written:[/] {escape(str(exc))}")
     return written
+
+
+@app.command()
+def chat(
+    path: Annotated[Path, typer.Argument(help="Data file to talk about.")],
+    engine: Annotated[
+        Engine | None,
+        typer.Option("--engine", help="Dataframe API the generated code is written against."),
+    ] = None,
+    critique: Annotated[
+        bool,
+        typer.Option("--critique/--no-critique", help="Check each answer for caveats."),
+    ] = True,
+    show_code: Annotated[
+        bool, typer.Option("--code/--no-code", help="Print the code behind each answer.")
+    ] = True,
+) -> None:
+    """Ask questions about one file, in a conversation that remembers.
+
+    `ask` pays for sniffing, loading and profiling on every question and forgets
+    the answer. This keeps all three, so a follow-up can refer to what came
+    before. Every toggle is also a slash command, so nothing here is a decision
+    you are stuck with.
+    """
+    spec = None
+    try:
+        spec = sniff(path)
+        profile_result, sample = profile_with_sample(spec)
+    except (InsightsmithError, OSError) as exc:
+        _fail(exc)
+    except PolarsError as exc:
+        hint = f" (read as {spec.format.value})" if spec is not None else ""
+        _fail(f"could not parse {path}{hint}: {_first_line(exc)}")
+
+    state = SessionState(
+        source=path,
+        card=build_card(profile_result, sample),
+        profile=profile_result,
+        frame=sample,
+        engine=engine or _configured().engine,
+        critique=critique,
+        show_code=show_code,
+    )
+    repl.run(state, console=console)
 
 
 @app.command()

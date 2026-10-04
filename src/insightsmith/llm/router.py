@@ -64,6 +64,17 @@ class Router:
             self._providers[name] = build_provider(name, base_urls=self.config.base_urls)
         return self._providers[name]
 
+    @property
+    def resolved(self) -> dict[str, str]:
+        """Roles that have actually been routed, and to what.
+
+        Read rather than asked: calling :meth:`route` to find out would resolve
+        the role as a side effect, reaching the provider for its capabilities.
+        A report naming a model that never ran would also be wrong about the
+        thing it exists to record.
+        """
+        return {role: route.reference for role, route in self._routes.items()}
+
     def route(self, role: str) -> Route:
         """Resolve a role, reading capabilities to choose a strategy.
 

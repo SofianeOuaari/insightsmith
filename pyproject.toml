@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "insightsmith"
-version = "0.8.5"
+version = "0.9.0"
 description = "Agentic data consultant that runs on your own hardware"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -38,6 +38,11 @@ dependencies = [
   "rich>=13.7",
   "charset-normalizer>=3.3",
   "jinja2>=3.1",
+  # The REPL's line editing, history and completion. Base rather than an extra
+  # because `ismith chat` is a headline command and stdlib readline is absent on
+  # Windows, which would leave the platform least able to spare it with no
+  # history at all. Pure Python, no compiled parts, one transitive dep (wcwidth).
+  "prompt_toolkit>=3.0",
   "psutil>=5.9",
   "httpx>=0.27",
   "tomli>=2.0 ; python_version < '3.11'",

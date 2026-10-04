@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. This file is generated
 by [git-cliff](https://github.com/orhun/git-cliff) from the commit history.
 
+## [0.9.0] - 2026-10-04
+
+### Features
+
+- **repl**: Ismith chat, a conversation that remembers
+
+## [0.8.5] - 2026-09-20
+
+### Features
+
+- **report**: Forge a run into HTML, Markdown, PDF and a notebook
+
 ## [0.8.4] - 2026-09-16
 
 ### Features
